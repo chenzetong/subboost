@@ -182,6 +182,8 @@ describe("SubscriptionLinkDialog", () => {
       readOnly: true,
     });
     expect(html).toContain("Shadowrocket CONF 订阅链接");
+    expect(html).toContain("CONF 不包含节点地址或密钥");
+    expect(html).toContain("请先在 Shadowrocket 导入节点");
 
     captures.buttons[0].onClick();
     captures.buttons.at(-1).onClick();

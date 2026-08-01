@@ -204,7 +204,8 @@ export function SubscriptionLinkDialog({
                 </IconButton>
               </div>
               <p className="text-xs text-white/50">
-                导出时会安全展开 proxy-provider 节点，并将 MetaCubeX .mrs 规则转换成 Shadowrocket 文本规则。
+                CONF 不包含节点地址或密钥；请先在 Shadowrocket 导入节点。导出时仅在内存展开
+                proxy-provider 以保留节点名称，并将 MetaCubeX .mrs 转换成文本规则。
               </p>
             </div>
 

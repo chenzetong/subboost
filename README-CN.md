@@ -18,7 +18,7 @@
 ## 亮点与场景
 
 - **订阅转换**：支持订阅链接、YAML 文件和节点链接等多种格式导入。
-- **Shadowrocket 导出**：已保存订阅可生成自包含 `.conf` 链接，嵌入 SS、VMess、VLESS、Trojan、AnyTLS、Hysteria2 和 TUIC 节点；导出时仅在内存中展开 proxy-provider，并通过固定文本转换接口兼容 MetaCubeX `.mrs` 规则。
+- **Shadowrocket 导出**：已保存订阅可生成仅路由 `.conf` 链接，不包含节点地址、端口、密码或 UUID；请先在 Shadowrocket 导入节点。导出时仅在内存中展开 proxy-provider 以保留节点名称，并通过固定文本转换接口兼容 MetaCubeX `.mrs` 规则。
 - **节点管理**：支持批量对节点重命名、删除或配置监听端口。
 - **节点筛选**：可在分流组高级模式中按导入源、地区和自定义规则筛选节点。
 - **链式代理**：一键可视化配置链式代理和 `中转代理组`。

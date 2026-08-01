@@ -602,7 +602,7 @@ function SubscriptionRow({
           size="sm"
           onClick={() => void onCopy(resolveShadowrocketUrl(sub), `${sub.id}:shadowrocket`)}
           className="gap-0 sm:gap-2"
-          title="复制包含节点与分流规则的 Shadowrocket CONF 订阅链接"
+          title="复制仅含策略组与分流规则、不含节点密钥的 Shadowrocket CONF 链接"
         >
           {copiedId === `${sub.id}:shadowrocket` ? (
             <>

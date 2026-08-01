@@ -559,9 +559,9 @@ async function expandProxyProviderNodes(
 }
 
 /**
- * Generates a self-contained Shadowrocket profile without persisting provider
- * credentials or fetched nodes. Provider-only sources are expanded in memory
- * through the same SSRF-hardened importer used by normal subscription refresh.
+ * Generates a routing-only Shadowrocket profile without writing node
+ * endpoints, credentials, or UUIDs into the CONF. Provider-only sources are
+ * expanded in memory solely to preserve node names and proxy-group membership.
  */
 export async function generateSubscriptionShadowrocketConf(
   token: string
@@ -575,7 +575,7 @@ export async function generateSubscriptionShadowrocketConf(
   const exportConfig = disableProxyProviderSources(secrets.config);
   const yaml = generateClashYaml(buildGenerateOptionsFromConfig(exportConfig, { nodes: expanded.nodes }));
   const converted = convertClashYaml(yaml, {
-    embedNodes: true,
+    embedNodes: false,
     ruleProviderBaseUrl: `${getAppUrl()}/api/rules/shadowrocket`,
   });
   const warningHeader = expanded.warnings.length > 0

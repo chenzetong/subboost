@@ -13,7 +13,7 @@ import {
   type UnknownRecord,
 } from "./types";
 
-export const DEFAULT_OPTIONS: ConversionOptions = { embedNodes: true };
+export const DEFAULT_OPTIONS: ConversionOptions = { embedNodes: false };
 const BUILTIN_POLICIES = new Set(["DIRECT", "REJECT", "PROXY"]);
 
 function isRecord(value: unknown): value is UnknownRecord {
