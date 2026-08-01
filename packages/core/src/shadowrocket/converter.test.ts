@@ -34,6 +34,7 @@ rules:
 describe("convertClashYaml", () => {
   it("embeds common SubBoost node types including AnyTLS", () => {
     const result = convertClashYaml(YAML, {
+      embedNodes: true,
       ruleProviderBaseUrl: "https://subboost.example/api/rules/shadowrocket",
     });
 
@@ -72,5 +73,27 @@ describe("convertClashYaml", () => {
     const result = convertClashYaml(YAML);
     expect(result.conf).toContain("# SKIPPED RULE-SET,anthropic,Proxy");
     expect(result.metrics.providersSkipped).toBe(2);
+  });
+
+  it("can generate routing-only CONF without node endpoints or credentials", () => {
+    const result = convertClashYaml(YAML, {
+      embedNodes: false,
+      ruleProviderBaseUrl: "https://subboost.example/api/rules/shadowrocket",
+    });
+
+    expect(result.metrics.proxiesRead).toBe(7);
+    expect(result.metrics.proxiesEmbedded).toBe(0);
+    expect(result.conf).not.toContain("[Proxy]\n");
+    expect(result.conf).not.toContain("ss.example.com");
+    expect(result.conf).not.toContain("ss-secret");
+    expect(result.conf).not.toContain("11111111-1111-4111-8111-111111111111");
+    expect(result.conf).not.toContain("password=");
+    expect(result.conf).not.toContain("auth=");
+    expect(result.conf).toContain("Proxy = select,SS,VMess,VLESS,Trojan,AnyTLS,HY2,TUIC");
+    expect(result.conf).toContain("[Rule]\n");
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({
+      code: "ROUTING_ONLY",
+      severity: "info",
+    }));
   });
 });

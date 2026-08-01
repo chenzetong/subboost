@@ -168,11 +168,14 @@ describe("local subscription service", () => {
     mocks.buildGenerateOptionsFromConfig.mockReturnValue({ nodes: [node()] });
     mocks.generateClashYaml.mockReturnValue("mixed-port: 7890\n");
     mocks.convertClashYaml.mockReturnValue({
-      conf: "[Proxy]\nImported = ss,imported.example.com,443,password=secret,method=aes-128-gcm\n",
-      diagnostics: [{ severity: "info", code: "MITM_OMITTED", message: "not needed" }],
+      conf: "[Proxy Group]\nProxy = select,Imported\n\n[Rule]\nFINAL,Proxy\n",
+      diagnostics: [
+        { severity: "info", code: "ROUTING_ONLY", message: "nodes omitted" },
+        { severity: "info", code: "MITM_OMITTED", message: "not needed" },
+      ],
       metrics: {
         proxiesRead: 1,
-        proxiesEmbedded: 1,
+        proxiesEmbedded: 0,
         groupsRead: 1,
         groupsWritten: 1,
         rulesRead: 1,
@@ -294,13 +297,15 @@ describe("local subscription service", () => {
       })
     );
     expect(mocks.convertClashYaml).toHaveBeenCalledWith("mixed-port: 7890\n", {
-      embedNodes: true,
+      embedNodes: false,
       ruleProviderBaseUrl: "http://127.0.0.1:3001/api/rules/shadowrocket",
     });
     expect(result).toMatchObject({
-      conf: expect.stringContaining("[Proxy]"),
-      metrics: { proxiesEmbedded: 1 },
+      conf: expect.stringContaining("[Proxy Group]"),
+      metrics: { proxiesEmbedded: 0 },
     });
+    expect(result?.conf).not.toContain("[Proxy]");
+    expect(result?.conf).not.toContain("password=");
   });
 
   it("lists, gets, and deletes subscriptions through prisma", async () => {
