@@ -13,6 +13,7 @@ export interface Subscription {
   name: string;
   token: string;
   subscriptionUrl: string;
+  shadowrocketUrl?: string;
   isPrimary: boolean;
   autoUpdateInterval: number | null;
   autoUpdateState: SubscriptionAutoUpdateState;

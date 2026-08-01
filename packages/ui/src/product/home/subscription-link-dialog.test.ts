@@ -177,9 +177,14 @@ describe("SubscriptionLinkDialog", () => {
       value: "https://sub.example.com/sub/token",
       readOnly: true,
     });
+    expect(captures.inputs[1]).toMatchObject({
+      value: "https://sub.example.com/sub/token.conf",
+      readOnly: true,
+    });
+    expect(html).toContain("Shadowrocket CONF 订阅链接");
 
     captures.buttons[0].onClick();
-    captures.buttons[1].onClick();
+    captures.buttons.at(-1).onClick();
 
     expect(baseProps.handleCopyUrl).toHaveBeenCalled();
     expect(baseProps.onOpenChange).toHaveBeenCalledWith(false);

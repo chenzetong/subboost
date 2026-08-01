@@ -1,6 +1,6 @@
 "use client";
 
-import type * as React from "react";
+import * as React from "react";
 import { Check, Copy, Link as LinkIcon, Loader2 } from "lucide-react";
 import { Button } from "@subboost/ui/components/ui/button";
 import { FormField } from "@subboost/ui/components/ui/form-field";
@@ -63,6 +63,19 @@ export function SubscriptionLinkDialog({
 }: Props) {
   const close = () => onOpenChange(false);
   const minAutoUpdateLabel = getAutoUpdateIntervalPolicyMinLabel(autoUpdatePolicy);
+  const shadowrocketUrl = React.useMemo(() => {
+    const replaced = subscriptionUrl.replace(/\/config\.ya?ml(?=\?|$)/i, "/config.conf");
+    if (!subscriptionUrl || replaced !== subscriptionUrl) return replaced;
+    const [path, suffix = ""] = subscriptionUrl.split(/(?=[?#])/u, 2);
+    return `${path}.conf${suffix}`;
+  }, [subscriptionUrl]);
+  const [shadowrocketCopied, setShadowrocketCopied] = React.useState(false);
+  const copyShadowrocketUrl = async () => {
+    if (!shadowrocketUrl) return;
+    await navigator.clipboard.writeText(shadowrocketUrl);
+    setShadowrocketCopied(true);
+    setTimeout(() => setShadowrocketCopied(false), 2000);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -76,7 +89,7 @@ export function SubscriptionLinkDialog({
           </DialogTitle>
           <DialogDescription>
             {subscriptionUrl
-              ? "复制下方链接到 Clash 客户端导入使用"
+              ? "复制下方链接到 Clash 客户端导入使用，也可使用 Shadowrocket CONF 链接"
               : isEditingExistingSubscription
                 ? "将覆盖该订阅的配置与订阅源，链接保持不变"
                 : "生成持久化的订阅链接，支持在 Clash 客户端中自动更新"}
@@ -155,7 +168,7 @@ export function SubscriptionLinkDialog({
         ) : (
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <p className="text-sm font-medium">订阅链接</p>
+              <p className="text-sm font-medium">Clash YAML 订阅链接</p>
               <div className="flex gap-2">
                 <Input value={subscriptionUrl} readOnly className="font-mono text-xs" />
                 <IconButton
@@ -171,6 +184,28 @@ export function SubscriptionLinkDialog({
                   )}
                 </IconButton>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Shadowrocket CONF 订阅链接</p>
+              <div className="flex gap-2">
+                <Input value={shadowrocketUrl} readOnly className="font-mono text-xs" />
+                <IconButton
+                  label={shadowrocketCopied ? "已复制 Shadowrocket 链接" : "复制 Shadowrocket 链接"}
+                  variant="outline"
+                  onClick={() => void copyShadowrocketUrl()}
+                  className="flex-shrink-0"
+                >
+                  {shadowrocketCopied ? (
+                    <Check className="h-4 w-4 text-green-400" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </IconButton>
+              </div>
+              <p className="text-xs text-white/50">
+                导出时会安全展开 proxy-provider 节点，并将 MetaCubeX .mrs 规则转换成 Shadowrocket 文本规则。
+              </p>
             </div>
 
             <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 text-sm">
