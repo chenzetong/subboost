@@ -40,4 +40,15 @@ describe("convertMetaCubeXRuleList", () => {
     expect(result.content).toContain("IP-CIDR6,2001:db8::1/128");
     expect(result.content).not.toContain("example.com");
   });
+
+  it("handles long adversarial lines without regular-expression backtracking", () => {
+    const result = convertMetaCubeXRuleList(
+      `${"!.".repeat(50_000)}!\nvalid.example.com${" ".repeat(50_000)}# comment\n`,
+      "geosite"
+    );
+
+    expect(result.content).toBe("DOMAIN,valid.example.com\n");
+    expect(result.inputLines).toBe(2);
+    expect(result.skippedLines).toBe(1);
+  });
 });

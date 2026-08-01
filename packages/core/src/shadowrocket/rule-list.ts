@@ -23,14 +23,64 @@ function isIpv6Cidr(value: string): boolean {
 }
 
 function cleanDomain(value: string): string {
-  return value.trim().replace(/^\.+/, "").replace(/\.$/, "");
+  const trimmed = value.trim();
+  let start = 0;
+  while (start < trimmed.length && trimmed.charCodeAt(start) === 46) start += 1;
+  const end = trimmed.endsWith(".") ? trimmed.length - 1 : trimmed.length;
+  return trimmed.slice(start, end);
+}
+
+function isWhitespaceCode(code: number): boolean {
+  return code === 9 || code === 11 || code === 12 || code === 13 || code === 32;
+}
+
+function findInlineComment(line: string): number {
+  let searchFrom = 1;
+  while (searchFrom < line.length) {
+    const hash = line.indexOf("#", searchFrom);
+    if (hash < 0) return -1;
+    if (isWhitespaceCode(line.charCodeAt(hash - 1))) {
+      let commentStart = hash - 1;
+      while (commentStart > 0 && isWhitespaceCode(line.charCodeAt(commentStart - 1))) {
+        commentStart -= 1;
+      }
+      return commentStart;
+    }
+    searchFrom = hash + 1;
+  }
+  return -1;
+}
+
+function isDomainListEntry(value: string): boolean {
+  if (value.length === 0 || value.length > 253) return false;
+  let hasDot = false;
+  let labelLength = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 46) {
+      if (labelLength === 0) return false;
+      hasDot = true;
+      labelLength = 0;
+      continue;
+    }
+
+    const isDigit = code >= 48 && code <= 57;
+    const isLowercaseLetter = code >= 97 && code <= 122;
+    const isUppercaseLetter = code >= 65 && code <= 90;
+    const isSupportedMarker = code === 33 || code === 42 || code === 43 || code === 45 || code === 64 || code === 95;
+    if (!isDigit && !isLowercaseLetter && !isUppercaseLetter && !isSupportedMarker) return false;
+    labelLength += 1;
+  }
+
+  return hasDot && labelLength > 0;
 }
 
 function convertLine(rawLine: string, kind: "geosite" | "geoip"): string | null {
   let line = rawLine.trim();
   if (!line || line.startsWith("#") || line.startsWith("//")) return null;
 
-  const inlineComment = line.search(/\s+#/);
+  const inlineComment = findInlineComment(line);
   if (inlineComment >= 0) line = line.slice(0, inlineComment).trim();
   if (!line) return null;
 
@@ -56,13 +106,13 @@ function convertLine(rawLine: string, kind: "geosite" | "geoip"): string | null 
     return value ? `DOMAIN-KEYWORD,${value}` : null;
   }
   if (prefix) return null;
-  if (line.startsWith("regexp:") || /^\/.+\/$/.test(line)) return null;
+  if (line.startsWith("regexp:") || (line.length > 2 && line.startsWith("/") && line.endsWith("/"))) return null;
 
-  if (line.startsWith("+." ) || line.startsWith("*.")) {
+  if (line.startsWith("+.") || line.startsWith("*.")) {
     const domain = cleanDomain(line.slice(2));
     return domain ? `DOMAIN-SUFFIX,${domain}` : null;
   }
-  if (!/^[a-z0-9_.*!+@-]+(?:\.[a-z0-9_.*!+@-]+)+$/i.test(line)) return null;
+  if (!isDomainListEntry(line)) return null;
   const domain = cleanDomain(line);
   return domain ? `DOMAIN,${domain}` : null;
 }
@@ -72,7 +122,7 @@ export function convertMetaCubeXRuleList(
   source: string,
   kind: "geosite" | "geoip"
 ): RuleListConversionResult {
-  const rawLines = source.split(/\r?\n/);
+  const rawLines = source.split("\n");
   const output: string[] = [];
   const seen = new Set<string>();
   let candidates = 0;
