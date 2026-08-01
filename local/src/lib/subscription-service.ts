@@ -1,7 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { generateClashYaml } from "@subboost/core/generator";
+import { convertClashYaml, type Diagnostic, type ConversionMetrics } from "@subboost/core/shadowrocket";
 import { buildGenerateOptionsFromConfig, getEffectiveTestOptions } from "@subboost/core/subscription/config-utils";
 import { buildProxyProvidersFromConfig } from "@subboost/core/subscription/proxy-providers";
+import {
+  mergeParsedSourceNodes,
+  prepareSourceParsedNodes,
+  type DeletedNodeDescriptor,
+} from "@subboost/core/subscription/source-node-refresh";
 import type { SubscriptionResponseInfo } from "@subboost/core/subscription/subscription-response-info";
 import type { ParsedNode } from "@subboost/core/types/node";
 import {
@@ -11,8 +17,10 @@ import {
   normalizeSubscriptionInfoForPersistence,
   normalizeSubscriptionName,
   normalizeSubscriptionUrlList,
+  normalizeSavedSourcesForPersistence,
   prepareRefreshCacheResult,
   refreshNodeSnapshot,
+  resolveSmartNodeMatchingEnabled,
   serializeSubscriptionDetailData,
   serializeSubscriptionSummaryData,
   validateSubscriptionNodeList,
@@ -63,6 +71,7 @@ export type SubscriptionSummary = {
   nodeCount: number;
   sourceCount: number;
   yamlUrl: string;
+  shadowrocketUrl: string;
   isPrimary: boolean;
   autoUpdateInterval: number | null;
   smartNodeMatchingEnabled: boolean;
@@ -97,6 +106,12 @@ export type GeneratedSubscriptionYaml = {
   isAdmin: boolean;
 };
 
+export type GeneratedSubscriptionShadowrocketConf = GeneratedSubscriptionYaml & {
+  conf: string;
+  diagnostics: Diagnostic[];
+  metrics: ConversionMetrics;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -111,6 +126,10 @@ function validateLocalSubscriptionNodes(value: unknown): ParsedNode[] {
 
 function buildLocalSubscriptionUrl(token: string): string {
   return `${getAppUrl()}/api/subscriptions/${token}/config.yaml`;
+}
+
+function buildLocalShadowrocketUrl(token: string): string {
+  return `${getAppUrl()}/api/subscriptions/${token}/config.conf`;
 }
 
 function buildLocalSubscriptionConfig(
@@ -163,27 +182,29 @@ export function readSubscriptionSecrets(row: SubscriptionRow) {
 export function formatSubscription(row: SubscriptionRow): SubscriptionSummary {
   const secrets = readSubscriptionSecrets(row);
   const subscriptionUrl = buildLocalSubscriptionUrl(row.token);
-  return serializeSubscriptionSummaryData(row, secrets, {
+  const summary = serializeSubscriptionSummaryData(row, secrets, {
     subscriptionUrl,
     yamlUrl: subscriptionUrl,
     dateMode: "iso",
     includeCounts: true,
     includeFailureSourceState: false,
     includeLastAttemptedAt: true,
-  }) as SubscriptionSummary;
+  }) as Omit<SubscriptionSummary, "shadowrocketUrl">;
+  return { ...summary, shadowrocketUrl: buildLocalShadowrocketUrl(row.token) };
 }
 
 export function formatSubscriptionDetail(row: SubscriptionRow): SubscriptionDetail {
   const secrets = readSubscriptionSecrets(row);
   const subscriptionUrl = buildLocalSubscriptionUrl(row.token);
-  return serializeSubscriptionDetailData(row, secrets, {
+  const detail = serializeSubscriptionDetailData(row, secrets, {
     subscriptionUrl,
     yamlUrl: subscriptionUrl,
     dateMode: "iso",
     includeCounts: true,
     includeFailureSourceState: false,
     includeLastAttemptedAt: true,
-  }) as SubscriptionDetail;
+  }) as Omit<SubscriptionDetail, "shadowrocketUrl">;
+  return { ...detail, shadowrocketUrl: buildLocalShadowrocketUrl(row.token) };
 }
 
 export async function listSubscriptions(ownerId: string): Promise<SubscriptionSummary[]> {
@@ -453,6 +474,120 @@ export async function generateSubscriptionYaml(token: string): Promise<Generated
   await prisma.subscription.update({ where: { id: row.id }, data: { lastAccessedAt: new Date() } });
   return {
     yaml,
+    name: row.name,
+    subscriptionInfo: secrets.subscriptionInfo,
+    cacheExpirySeconds: CACHE_TTL_SECONDS,
+    autoUpdateIntervalSeconds: row.autoUpdateInterval,
+    isAdmin: true,
+  };
+}
+
+function readDeletedNodeNames(config: Record<string, unknown>): string[] {
+  if (!Array.isArray(config.deletedNodeNames)) return [];
+  return config.deletedNodeNames.filter((item): item is string => typeof item === "string");
+}
+
+function readDeletedNodes(config: Record<string, unknown>): DeletedNodeDescriptor[] {
+  if (!Array.isArray(config.deletedNodes)) return [];
+  return config.deletedNodes.filter(
+    (item): item is DeletedNodeDescriptor => Boolean(item) && typeof item === "object" && !Array.isArray(item)
+  );
+}
+
+function disableProxyProviderSources(config: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(config.sources)) return config;
+  return {
+    ...config,
+    sources: config.sources.map((source) => {
+      if (!isRecord(source) || source.type !== "url" || source.useProxyProviders !== true) return source;
+      return { ...source, useProxyProviders: false };
+    }),
+  };
+}
+
+function safeCommentSubject(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").replace(/[^\p{L}\p{N}_.!+@ -]/gu, "_").slice(0, 80) || "unknown";
+}
+
+async function expandProxyProviderNodes(
+  secrets: ReturnType<typeof readSubscriptionSecrets>
+): Promise<{ nodes: ParsedNode[]; warnings: string[] }> {
+  const sources = normalizeSavedSourcesForPersistence(secrets.config.sources, { fallbackUrls: secrets.urls });
+  const providerSources = sources.filter(
+    (source): source is SavedSource => source.type === "url" && source.useProxyProviders === true
+  );
+  if (providerSources.length === 0) return { nodes: secrets.nodes, warnings: [] };
+
+  let nodes = secrets.nodes;
+  const warnings: string[] = [];
+  const deletedNodeNames = readDeletedNodeNames(secrets.config);
+  const deletedNodes = readDeletedNodes(secrets.config);
+  const smartNodeMatchingEnabled = resolveSmartNodeMatchingEnabled(secrets.config);
+
+  for (const source of providerSources) {
+    const imported = await importSourceUrlDirect({
+      url: source.content,
+      ...(source.userinfoUrl ? { userinfoUrl: source.userinfoUrl } : {}),
+      ...(source.userinfoUserAgent ? { userinfoUserAgent: source.userinfoUserAgent } : {}),
+    });
+    if (!imported.ok || imported.parsedNodes.length === 0) {
+      const reason = imported.ok
+        ? imported.parseErrors[0] ?? "未解析到可用节点"
+        : imported.publicReason ?? imported.error ?? "订阅源拉取失败";
+      warnings.push(`${safeCommentSubject(source.id)}: ${safeCommentSubject(reason)}`);
+      continue;
+    }
+
+    const prepared = prepareSourceParsedNodes(imported.parsedNodes, {
+      currentTag: source.tag,
+      currentNameTemplate: source.nameTemplate,
+    });
+    nodes = mergeParsedSourceNodes(nodes, prepared, deletedNodeNames, {
+      sourceId: source.id,
+      currentTag: source.tag,
+      currentNameTemplate: source.nameTemplate,
+      lastTag: source.lastParsedTag,
+      lastNameTemplate: source.lastParsedNameTemplate,
+      smartNodeMatchingEnabled,
+      deletedNodes,
+    }).nodes;
+    if (nodes.length > MAX_NODES_PER_SUBSCRIPTION) {
+      throw new Error(`Node count cannot exceed ${MAX_NODES_PER_SUBSCRIPTION}.`);
+    }
+  }
+  return { nodes, warnings };
+}
+
+/**
+ * Generates a self-contained Shadowrocket profile without persisting provider
+ * credentials or fetched nodes. Provider-only sources are expanded in memory
+ * through the same SSRF-hardened importer used by normal subscription refresh.
+ */
+export async function generateSubscriptionShadowrocketConf(
+  token: string
+): Promise<GeneratedSubscriptionShadowrocketConf | null> {
+  const row = await prisma.subscription.findUnique({ where: { token }, include: { autoUpdateState: true } });
+  if (!row) return null;
+  const secrets = readSubscriptionSecrets(row);
+  const expanded = await expandProxyProviderNodes(secrets);
+  if (expanded.nodes.length === 0) return null;
+
+  const exportConfig = disableProxyProviderSources(secrets.config);
+  const yaml = generateClashYaml(buildGenerateOptionsFromConfig(exportConfig, { nodes: expanded.nodes }));
+  const converted = convertClashYaml(yaml, {
+    embedNodes: true,
+    ruleProviderBaseUrl: `${getAppUrl()}/api/rules/shadowrocket`,
+  });
+  const warningHeader = expanded.warnings.length > 0
+    ? `${expanded.warnings.map((warning) => `# Provider warning: ${warning}`).join("\n")}\n`
+    : "";
+
+  await prisma.subscription.update({ where: { id: row.id }, data: { lastAccessedAt: new Date() } });
+  return {
+    yaml,
+    conf: `${warningHeader}${converted.conf}`,
+    diagnostics: converted.diagnostics,
+    metrics: converted.metrics,
     name: row.name,
     subscriptionInfo: secrets.subscriptionInfo,
     cacheExpirySeconds: CACHE_TTL_SECONDS,

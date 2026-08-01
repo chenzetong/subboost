@@ -18,6 +18,7 @@
 ## Highlights & Use Cases
 
 - **Subscription conversion**: Import subscription links, YAML files, node links, and other common formats.
+- **Shadowrocket export**: Saved subscriptions expose a self-contained `.conf` link with embedded SS, VMess, VLESS, Trojan, AnyTLS, Hysteria2, and TUIC nodes. Proxy-provider sources are expanded in memory, and MetaCubeX `.mrs` rules are served through fixed text-conversion routes.
 - **Node management**: Rename, delete, or configure listening ports for nodes in batches.
 - **Node filtering**: Build `filtered proxy groups` with only selected nodes by source, region, and custom rules.
 - **Chained proxies**: Configure chained proxies and `relay proxy groups` visually in one click.
@@ -55,6 +56,11 @@ npm run lint
 npm run test:unit
 npm run check:local-app
 ```
+
+This fork's `Sync upstream main` workflow checks and merges
+`SubBoost/subboost:main` daily and can also be dispatched manually. If an
+upstream change conflicts with the Shadowrocket customization, the workflow
+fails without changing `main` so the conflict can be reviewed before deployment.
 
 ## Links
 

@@ -6,6 +6,7 @@ import {
   deleteSubscription,
   formatSubscription,
   formatSubscriptionDetail,
+  generateSubscriptionShadowrocketConf,
   generateSubscriptionYaml,
   getSubscription,
   listSubscriptions,
@@ -16,6 +17,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   generateClashYaml: vi.fn(),
+  convertClashYaml: vi.fn(),
   buildGenerateOptionsFromConfig: vi.fn(),
   getEffectiveTestOptions: vi.fn(),
   buildProxyProvidersFromConfig: vi.fn(),
@@ -43,6 +45,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@subboost/core/generator", () => ({
   generateClashYaml: mocks.generateClashYaml,
+}));
+
+vi.mock("@subboost/core/shadowrocket", () => ({
+  convertClashYaml: mocks.convertClashYaml,
 }));
 
 vi.mock("@subboost/core/subscription/config-utils", () => ({
@@ -161,6 +167,21 @@ describe("local subscription service", () => {
     mocks.buildProxyProvidersFromConfig.mockReturnValue(null);
     mocks.buildGenerateOptionsFromConfig.mockReturnValue({ nodes: [node()] });
     mocks.generateClashYaml.mockReturnValue("mixed-port: 7890\n");
+    mocks.convertClashYaml.mockReturnValue({
+      conf: "[Proxy]\nImported = ss,imported.example.com,443,password=secret,method=aes-128-gcm\n",
+      diagnostics: [{ severity: "info", code: "MITM_OMITTED", message: "not needed" }],
+      metrics: {
+        proxiesRead: 1,
+        proxiesEmbedded: 1,
+        groupsRead: 1,
+        groupsWritten: 1,
+        rulesRead: 1,
+        rulesWritten: 1,
+        providersRead: 0,
+        providersMapped: 0,
+        providersSkipped: 0,
+      },
+    });
     mocks.prisma.subscription.findMany.mockResolvedValue([row()]);
     mocks.prisma.subscription.create.mockResolvedValue(row({ name: "Created" }));
     mocks.prisma.subscription.findFirst.mockResolvedValue(row());
@@ -191,6 +212,7 @@ describe("local subscription service", () => {
       id: "sub-1",
       name: "Saved",
       subscriptionUrl: "http://127.0.0.1:3001/api/subscriptions/token-1/config.yaml",
+      shadowrocketUrl: "http://127.0.0.1:3001/api/subscriptions/token-1/config.conf",
       nodeCount: 1,
       sourceCount: 1,
       isPrimary: true,
@@ -241,6 +263,43 @@ describe("local subscription service", () => {
         disabledReason: null,
         disabledPreviousInterval: null,
       },
+    });
+  });
+
+  it("expands provider-only sources in memory for Shadowrocket export", async () => {
+    mocks.prisma.subscription.findUnique.mockResolvedValueOnce(row({
+      encryptedNodes: JSON.stringify([]),
+      encryptedConfig: JSON.stringify({
+        sources: [{
+          id: "provider-1",
+          type: "url",
+          content: "https://example.com/provider",
+          useProxyProviders: true,
+          tag: "Airport",
+        }],
+      }),
+    }));
+
+    const result = await generateSubscriptionShadowrocketConf("token-1");
+
+    expect(mocks.importSourceUrlDirect).toHaveBeenCalledWith(expect.objectContaining({
+      url: "https://example.com/provider",
+    }));
+    expect(mocks.buildGenerateOptionsFromConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sources: [expect.objectContaining({ useProxyProviders: false })],
+      }),
+      expect.objectContaining({
+        nodes: [expect.objectContaining({ name: "[Airport]Imported", _sourceIds: ["provider-1"] })],
+      })
+    );
+    expect(mocks.convertClashYaml).toHaveBeenCalledWith("mixed-port: 7890\n", {
+      embedNodes: true,
+      ruleProviderBaseUrl: "http://127.0.0.1:3001/api/rules/shadowrocket",
+    });
+    expect(result).toMatchObject({
+      conf: expect.stringContaining("[Proxy]"),
+      metrics: { proxiesEmbedded: 1 },
     });
   });
 

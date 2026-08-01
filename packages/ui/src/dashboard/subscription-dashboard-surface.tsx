@@ -78,6 +78,14 @@ function buildYamlDownloadFilename(name: string): string {
   return `${base}.yaml`;
 }
 
+function resolveShadowrocketUrl(subscription: Subscription): string {
+  if (subscription.shadowrocketUrl) return subscription.shadowrocketUrl;
+  const replaced = subscription.subscriptionUrl.replace(/\/config\.ya?ml(?=\?|$)/i, "/config.conf");
+  if (replaced !== subscription.subscriptionUrl) return replaced;
+  const [path, suffix = ""] = subscription.subscriptionUrl.split(/(?=[?#])/u, 2);
+  return `${path}.conf${suffix}`;
+}
+
 function triggerBrowserDownload(href: string, filename: string) {
   const anchor = document.createElement("a");
   anchor.href = href;
@@ -586,6 +594,25 @@ function SubscriptionRow({
             <>
               <Copy className="h-4 w-4" />
               <span className="hidden sm:inline">链接</span>
+            </>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void onCopy(resolveShadowrocketUrl(sub), `${sub.id}:shadowrocket`)}
+          className="gap-0 sm:gap-2"
+          title="复制包含节点与分流规则的 Shadowrocket CONF 订阅链接"
+        >
+          {copiedId === `${sub.id}:shadowrocket` ? (
+            <>
+              <Check className="h-4 w-4 text-green-500" />
+              <span className="hidden sm:inline text-green-500">已复制</span>
+            </>
+          ) : (
+            <>
+              <FileCode className="h-4 w-4" />
+              <span className="hidden sm:inline">小火箭</span>
             </>
           )}
         </Button>
