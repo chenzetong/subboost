@@ -57,6 +57,11 @@ npm run test:unit
 npm run check:local-app
 ```
 
+This fork's `Sync upstream main` workflow checks and merges
+`SubBoost/subboost:main` daily and can also be dispatched manually. If an
+upstream change conflicts with the Shadowrocket customization, the workflow
+fails without changing `main` so the conflict can be reviewed before deployment.
+
 ## Links
 
 - Online entry: [https://subboost.org](https://subboost.org)

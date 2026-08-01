@@ -57,6 +57,10 @@ npm run test:unit
 npm run check:local-app
 ```
 
+此 fork 的 `Sync upstream main` 工作流每天检查并合并
+`SubBoost/subboost:main`，也可在 GitHub Actions 页面手动触发。若上游变更与
+Shadowrocket 定制代码冲突，工作流会失败并保留 `main` 原状，需人工解决冲突后再部署。
+
 ## 相关链接
 
 - 在线入口：[https://subboost.org](https://subboost.org)
