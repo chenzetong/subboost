@@ -11,6 +11,7 @@ import {
   getSubscription,
   listSubscriptions,
   refreshSubscription,
+  resetSubscriptionLink,
   updateSubscription,
   type SubscriptionRow,
 } from "./subscription-service";
@@ -105,6 +106,30 @@ vi.mock("./source-import", () => ({
   fetchSourceUserInfoHeadersDirect: mocks.fetchSourceUserInfoHeadersDirect,
 }));
 
+describe("subscription link rotation", () => {
+  it("uses an atomic owner and old-token comparison and updates no other fields", async () => {
+    mocks.getAppUrl.mockReturnValue("https://local.subboost.test");
+    mocks.prisma.subscription.updateMany.mockResolvedValueOnce({ count: 1 });
+    const result = await resetSubscriptionLink("owner-1", "sub-1", "old");
+    expect(result.status).toBe("updated");
+    expect(result.subscription?.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(mocks.prisma.subscription.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "sub-1", ownerId: "owner-1", token: "old" }, data: { token: result.subscription?.token },
+    });
+    expect(result.subscription?.subscriptionUrl).toContain(result.subscription?.token);
+    expect(result.subscription?.shadowrocketUrl).toBe(
+      `https://local.subboost.test/api/subscriptions/${result.subscription?.token}/config.conf`
+    );
+  });
+
+  it("distinguishes a stale link from a subscription not owned by this account", async () => {
+    mocks.prisma.subscription.updateMany.mockResolvedValue({ count: 0 });
+    mocks.prisma.subscription.findFirst.mockResolvedValueOnce({ id: "sub-1" }).mockResolvedValueOnce(null);
+    await expect(resetSubscriptionLink("owner-1", "sub-1", "old")).resolves.toEqual({ status: "stale" });
+    await expect(resetSubscriptionLink("other", "sub-1", "old")).resolves.toEqual({ status: "not_found" });
+  });
+});
+
 function node(name = "Node") {
   return {
     name,
@@ -143,6 +168,10 @@ function row(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
       failureSourceState: null,
       lastFailedAt: new Date("2026-06-01T05:00:00.000Z"),
       lastAttemptedAt: new Date("2026-06-01T06:00:00.000Z"),
+      nodeQuotaFailureCount: 2,
+      lastNodeQuotaExceededAt: new Date("2026-06-01T06:30:00.000Z"),
+      lastNodeQuotaActual: 120,
+      lastNodeQuotaLimit: 100,
       disabledAt: null,
       disabledReason: null,
       disabledPreviousInterval: null,
@@ -155,7 +184,11 @@ describe("local subscription service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getAppUrl.mockReturnValue("http://127.0.0.1:3001");
-    mocks.prepareRefreshCacheResult.mockReturnValue({ ok: true, nodeCount: 1 });
+    mocks.prepareRefreshCacheResult.mockReturnValue({
+      ok: true,
+      nodeCount: 1,
+      refreshedConfig: { sources: [{ id: "source-1", type: "url", content: "https://example.com/sub" }] },
+    });
     mocks.refreshNodeSnapshot.mockResolvedValue({
       nodes: [node("Fresh")],
       savedSources: [{ id: "source-1", type: "url", content: "https://example.com/sub" }],
@@ -226,6 +259,10 @@ describe("local subscription service", () => {
         externalFailureCount: 2,
         lastFailedAt: "2026-06-01T05:00:00.000Z",
         lastAttemptedAt: "2026-06-01T06:00:00.000Z",
+        nodeQuotaFailureCount: 2,
+        lastNodeQuotaExceededAt: "2026-06-01T06:30:00.000Z",
+        lastNodeQuotaActual: 120,
+        lastNodeQuotaLimit: 100,
       },
     });
 
@@ -262,11 +299,51 @@ describe("local subscription service", () => {
         externalFailureCount: 0,
         lastFailedAt: null,
         lastAttemptedAt: null,
+        nodeQuotaFailureCount: 0,
+        lastNodeQuotaExceededAt: null,
+        lastNodeQuotaActual: null,
+        lastNodeQuotaLimit: null,
         disabledAt: null,
         disabledReason: null,
         disabledPreviousInterval: null,
       },
     });
+  });
+
+  it("handles missing, empty and ordinary Shadowrocket subscriptions without fetching providers", async () => {
+    mocks.prisma.subscription.findUnique.mockResolvedValueOnce(null);
+    expect(await generateSubscriptionShadowrocketConf("missing")).toBeNull();
+    mocks.prisma.subscription.findUnique.mockResolvedValueOnce(row({ encryptedNodes: "[]" }));
+    expect(await generateSubscriptionShadowrocketConf("empty")).toBeNull();
+    mocks.prisma.subscription.findUnique.mockResolvedValueOnce(row({ encryptedConfig: "{}" }));
+    expect(await generateSubscriptionShadowrocketConf("ordinary")).toMatchObject({ conf: expect.stringContaining("[Rule]") });
+    expect(mocks.importSourceUrlDirect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ok: false, publicReason: "Unavailable\n[Proxy]" },
+    { ok: false, error: "Transport unavailable" },
+    { ok: false },
+    { ok: false, publicReason: "" },
+    { ok: true, parsedNodes: [], parseErrors: ["Invalid node"] },
+    { ok: true, parsedNodes: [], parseErrors: [] },
+  ])("keeps existing nodes and safe warning comments when a provider fails: %j", async (failure) => {
+    mocks.prisma.subscription.findUnique.mockResolvedValueOnce(row({
+      encryptedConfig: JSON.stringify({
+        sources: [null, { id: "plain", type: "url", content: "https://example.com/plain" },
+          { id: "provider", type: "url", content: "https://example.com/provider", useProxyProviders: true,
+            userinfoUrl: "https://example.com/info", userinfoUserAgent: "test-agent" }],
+        deletedNodeNames: [null, "Removed"], deletedNodes: [null, "invalid", [], { name: "Removed" }],
+      }),
+    }));
+    mocks.importSourceUrlDirect.mockResolvedValueOnce(failure);
+    const result = await generateSubscriptionShadowrocketConf("token-1");
+    expect(result?.conf).toMatch(/^# Provider warning: provider: [^\n]+\n\[Proxy Group\]/);
+    expect(result?.conf).not.toContain("\n[Proxy]\n");
+    expect(mocks.importSourceUrlDirect).toHaveBeenCalledWith(expect.objectContaining({
+      userinfoUrl: "https://example.com/info", userinfoUserAgent: "test-agent",
+    }));
+    expect(mocks.prisma.subscription.update).toHaveBeenCalledWith(expect.objectContaining({ data: { lastAccessedAt: expect.any(Date) } }));
   });
 
   it("expands provider-only sources in memory for Shadowrocket export", async () => {
@@ -520,6 +597,10 @@ describe("local subscription service", () => {
         failureSourceState: null,
         lastFailedAt: null,
         lastAttemptedAt: null,
+        nodeQuotaFailureCount: 0,
+        lastNodeQuotaExceededAt: null,
+        lastNodeQuotaActual: null,
+        lastNodeQuotaLimit: null,
         disabledAt: null,
         disabledReason: null,
         disabledPreviousInterval: null,
@@ -628,6 +709,16 @@ describe("local subscription service", () => {
       body: { ok: true, nodeCount: 1 },
     });
     expect(mocks.prisma.$transaction).toHaveBeenCalled();
+    expect(mocks.prisma.subscriptionAutoUpdateState.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          nodeQuotaFailureCount: 0,
+          lastNodeQuotaExceededAt: null,
+          lastNodeQuotaActual: null,
+          lastNodeQuotaLimit: null,
+        }),
+      })
+    );
 
     mocks.prisma.subscription.updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(refreshSubscription("owner-1", "sub-1")).resolves.toEqual({

@@ -198,6 +198,10 @@ export function isPrivateOrReservedIp(hostname: string): boolean {
 export function isBenchmarkReservedIp(hostname: string): boolean {
   const version = isIP(hostname);
   if (version === 4) return isBenchmarkReservedIPv4(hostname);
+  if (version === 6) {
+    const hextets = expandIpv6Hextets(hostname);
+    return hextets !== null && ipv6InCidr(hextets, "2001:2::", 48);
+  }
   return false;
 }
 

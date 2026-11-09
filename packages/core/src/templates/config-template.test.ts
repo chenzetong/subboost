@@ -8,6 +8,21 @@ import { DEFAULT_LOAD_BALANCE_STRATEGY } from "@subboost/core/types/config";
 import { expectInvalid, validConfig } from "./config-template.test-helpers";
 
 describe("validateSubBoostTemplateConfig", () => {
+  it("round-trips independent test URLs and rejects malformed dialer addresses", () => {
+    const testUrl = "https://local.subboost.test/probe";
+    const dialer = { id: "relay", name: "Relay", type: "url-test" as const, relayNodes: ["A"], targetNodes: ["B"], testUrl };
+    const result = validateSubBoostTemplateConfig(validConfig({
+      proxyGroupAdvanced: { auto: { testUrl } },
+      customProxyGroups: [{ id: "custom", name: "Custom", emoji: "", groupType: "url-test", advanced: { testUrl } }],
+      dialerProxyGroups: [dialer],
+    }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.config.proxyGroupAdvanced?.auto.testUrl).toBe(testUrl);
+    expect(result.config.customProxyGroups[0].advanced?.testUrl).toBe(testUrl);
+    expect(result.config.dialerProxyGroups[0].testUrl).toBe(testUrl);
+    expect(validateSubBoostTemplateConfig(validConfig({dialerProxyGroups: [{...dialer, testUrl: "invalid"}]})).ok).toBe(false);
+  });
   it("accepts a minimal v1 config template", () => {
     const result = validateSubBoostTemplateConfig(validConfig());
 
@@ -146,7 +161,7 @@ describe("validateSubBoostTemplateConfig", () => {
     expect(result.config.customRules[0]).toMatchObject({
       id: "custom-rule-a",
       value: "example.com",
-      noResolve: true,
+      noResolve: false,
       target: { kind: "module", id: "select" },
     });
     expect(result.config.dialerProxyGroups[0]).toMatchObject({
@@ -164,6 +179,41 @@ describe("validateSubBoostTemplateConfig", () => {
     expect(result.config).not.toHaveProperty("moduleRuleOverrides");
     expect(result.config).not.toHaveProperty("moduleRuleExclusions");
     expect(result.config).not.toHaveProperty("allRulesOrderEditingEnabled");
+  });
+
+  it("drops ordered rules that target disabled custom proxy groups", () => {
+    const result = validateSubBoostTemplateConfig(
+      validConfig({
+        customProxyGroups: [
+          {
+            id: "disabled-group",
+            name: "Disabled Group",
+            emoji: "",
+            groupType: "select",
+            enabled: false,
+          },
+        ],
+        customRules: [
+          {
+            id: "disabled-target",
+            type: "DOMAIN",
+            value: "disabled.example.com",
+            target: { kind: "custom", id: "disabled-group" },
+          },
+          {
+            id: "active-target",
+            type: "DOMAIN",
+            value: "active.example.com",
+            target: "DIRECT",
+          },
+        ],
+        ruleOrder: ["custom-rule:disabled-target", "custom-rule:active-target"],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.ruleOrder).toEqual(["custom-rule:active-target"]);
   });
 
   it("uses defaults when optional compatibility fields are omitted", () => {

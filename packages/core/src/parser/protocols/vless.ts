@@ -9,10 +9,12 @@
 import { decodeBase64 } from "../base64";
 import type { VLESSNode, XHttpDownloadSettings, XHttpOpts, XHttpReuseSettings } from "@subboost/core/types/node";
 import { buildMihomoEchOptsFromShareValue } from "@subboost/core/mihomo/ech";
-import { normalizeRealityShortId } from "@subboost/core/mihomo/reality";
+import { isRealityPublicKey, normalizeRealityShortId } from "@subboost/core/mihomo/reality";
+import { isVlessMlkemEncryption } from "@subboost/core/mihomo/vless-encryption";
 import { splitWsPathEarlyData } from "../ws-early-data";
 import { parseUrlWithNeutralScheme, safeDecodeFormUrlEncoded, safeDecodeURIComponent } from "./url-decode";
 import { parseJsonObject, parseJsonStringMap } from "../json-utils";
+import { mergeXhttpExtra } from "./vless-xhttp";
 
 function parseBoolish(value: string | null | undefined): boolean | undefined {
   if (!value) return undefined;
@@ -62,13 +64,50 @@ function parseHeaderMap(raw: string): Record<string, string> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function parseShadowrocketXhttpObfsParam(raw: string): {
+  host?: string;
+  headers?: Record<string, string>;
+} {
+  const value = raw.trim();
+  if (!value) return {};
+
+  const parsed = parseJsonObject(value);
+  if (!parsed) return { host: value };
+
+  let host: string | undefined;
+  const headers: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(parsed)) {
+    const key = rawKey.trim();
+    if (!key || typeof rawValue !== "string") continue;
+    if (key.toLowerCase() === "host") {
+      const candidate = rawValue.trim();
+      if (!host && candidate) host = candidate;
+      continue;
+    }
+    headers[key] = rawValue;
+  }
+
+  return {
+    ...(host ? { host } : {}),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  };
+}
+
 function buildXhttpOptsFromQuery(params: URLSearchParams, fallbackPath: string, fallbackHost: string): XHttpOpts {
   const path = pickQueryValue(params, ["xhttp-path", "xhttp_path", "xhttpPath", "path"]) || fallbackPath || "/";
-  const host = pickQueryValue(params, ["xhttp-host", "xhttp_host", "xhttpHost", "host"]) || fallbackHost;
+  const obfsParam = parseShadowrocketXhttpObfsParam(params.get("obfsParam") || "");
+  const host =
+    pickQueryValue(params, ["xhttp-host", "xhttp_host", "xhttpHost", "host"]) ||
+    obfsParam.host ||
+    fallbackHost;
   const mode = pickQueryValue(params, ["xhttp-mode", "xhttp_mode", "xhttpMode", "mode"]);
-  const headers = parseHeaderMap(
+  const explicitHeaders = parseHeaderMap(
     pickQueryValue(params, ["xhttp-headers", "xhttp_headers", "xhttpHeaders", "headers"])
   );
+  const headers =
+    obfsParam.headers || explicitHeaders
+      ? { ...(obfsParam.headers || {}), ...(explicitHeaders || {}) }
+      : undefined;
   const noGrpcHeader = parseBoolish(
     pickQueryValue(params, ["no-grpc-header", "no_grpc_header", "noGrpcHeader"])
   );
@@ -77,7 +116,7 @@ function buildXhttpOptsFromQuery(params: URLSearchParams, fallbackPath: string, 
     params,
     ["sc-max-each-post-bytes", "sc_max_each_post_bytes", "scMaxEachPostBytes"]
   );
-  const scMaxEachPostBytes = scMaxEachPostBytesRaw ? Number.parseInt(scMaxEachPostBytesRaw, 10) : undefined;
+  const scMaxEachPostBytes = scMaxEachPostBytesRaw || undefined;
 
   const reuseSettings: XHttpReuseSettings = {};
   const reuseSettingKeys: Array<[keyof XHttpReuseSettings, string[]]> = [
@@ -102,17 +141,17 @@ function buildXhttpOptsFromQuery(params: URLSearchParams, fallbackPath: string, 
   );
   if (downloadHeaders) downloadSettings.headers = downloadHeaders;
 
-  return {
+  return mergeXhttpExtra(params, {
     path,
     ...(host ? { host } : {}),
     ...(mode ? { mode } : {}),
     ...(headers ? { headers } : {}),
     ...(noGrpcHeader !== undefined ? { "no-grpc-header": noGrpcHeader } : {}),
     ...(xPaddingBytes ? { "x-padding-bytes": xPaddingBytes } : {}),
-    ...(Number.isFinite(scMaxEachPostBytes) ? { "sc-max-each-post-bytes": scMaxEachPostBytes } : {}),
+    ...(scMaxEachPostBytes !== undefined ? { "sc-max-each-post-bytes": scMaxEachPostBytes } : {}),
     ...(Object.keys(reuseSettings).length > 0 ? { "reuse-settings": reuseSettings } : {}),
     ...(Object.keys(downloadSettings).length > 0 ? { "download-settings": downloadSettings } : {}),
-  };
+  });
 }
 
 function isDigitString(value: string): boolean {
@@ -225,7 +264,16 @@ export function parseVLESS(uri: string): VLESSNode {
     if (raw === "tcp" && headerType === "http") return "http";
     return raw;
   })();
-  const security = (params.get("security") || (normalized.isShadowrocket && parseBoolish(params.get("tls")) ? "reality" : "none")).trim().toLowerCase();
+  const pbk = pickQueryValue(params, ["pbk", "public-key", "public_key", "publicKey"]);
+  const explicitSecurity = (params.get("security") || "").trim().toLowerCase();
+  const usesImplicitShadowrocketTls =
+    !explicitSecurity &&
+    !pbk &&
+    normalized.isShadowrocket &&
+    parseBoolish(params.get("tls")) === true;
+  const security =
+    explicitSecurity ||
+    (pbk ? "reality" : usesImplicitShadowrocketTls ? "tls" : "none");
   const flow = (() => {
     const direct = params.get("flow") || "";
     if (direct.trim()) return direct.trim();
@@ -242,7 +290,6 @@ export function parseVLESS(uri: string): VLESSNode {
   const encryption = (params.get("encryption") || params.get("flow-encryption") || "").trim();
   const packetEncoding =
     (params.get("packet-encoding") || params.get("packet_encoding") || params.get("packetEncoding") || "").trim();
-  const pbk = pickQueryValue(params, ["pbk", "public-key", "public_key", "publicKey"]);
   const sid = pickQueryValue(params, ["sid", "short-id", "short_id", "shortId"]);
   const spiderX = params.get("spx") || "";
   const echRaw = params.get("ech");
@@ -285,6 +332,8 @@ export function parseVLESS(uri: string): VLESSNode {
   }
 
   if (allowInsecure) node["skip-cert-verify"] = true;
+  const tfo = parseBoolish(pickQueryValue(params, ["tfo", "fast-open", "fast_open", "fastOpen"]));
+  if (tfo !== undefined) node.tfo = tfo;
   if (sni) node.servername = sni;
   if (flow) node.flow = flow;
   if (encryption) node.encryption = encryption;
@@ -294,6 +343,7 @@ export function parseVLESS(uri: string): VLESSNode {
     if (list && list.length > 0) node.alpn = list;
   }
   if (clientFingerprint) node["client-fingerprint"] = clientFingerprint;
+  else if (usesImplicitShadowrocketTls) node["client-fingerprint"] = "chrome";
 
   if (params.get("pcs")) {
     (node as unknown as Record<string, unknown>).pcs = params.get("pcs");
@@ -304,9 +354,17 @@ export function parseVLESS(uri: string): VLESSNode {
 
   if (security === "reality") {
     const normalizedShortId = normalizeRealityShortId(sid);
+    const supportKeys = [
+      "support-x25519mlkem768", "support_x25519mlkem768", "supportX25519MLKEM768",
+    ];
+    const explicitSupport = supportKeys.some((key) => params.has(key));
+    const supportX25519Mlkem768 = explicitSupport
+      ? parseBoolish(pickQueryValue(params, supportKeys))
+      : isRealityPublicKey(pbk) && isVlessMlkemEncryption(encryption) ? true : undefined;
     const realityOpts: Record<string, unknown> = {
       ...(pbk ? { "public-key": pbk } : {}),
       ...(normalizedShortId ? { "short-id": normalizedShortId } : {}),
+      ...(pbk && supportX25519Mlkem768 !== undefined ? { "support-x25519mlkem768": supportX25519Mlkem768 } : {}),
       ...(spiderX ? { "_spider-x": spiderX } : {}),
     };
     if (Object.keys(realityOpts).length > 0) {
@@ -365,7 +423,11 @@ export function parseVLESS(uri: string): VLESSNode {
       break;
     case "xhttp":
       node.network = "xhttp";
-      node["xhttp-opts"] = buildXhttpOptsFromQuery(params, path || "/", host);
+      node["xhttp-opts"] = buildXhttpOptsFromQuery(
+        params,
+        path || "/",
+        params.get("obfs-host") || ""
+      );
       break;
     case "tcp":
     default:
@@ -375,5 +437,3 @@ export function parseVLESS(uri: string): VLESSNode {
 
   return node;
 }
-
-

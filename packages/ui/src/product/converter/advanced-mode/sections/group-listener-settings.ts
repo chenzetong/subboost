@@ -1,4 +1,4 @@
-import yaml from "js-yaml";
+import { loadMihomoYaml } from "@subboost/core/config/yaml-schema";
 import type { GroupListenerBinding, GroupListenerTarget } from "@subboost/core/types/config";
 
 /** 分组监听端口冲突检查所需的最小状态切片 */
@@ -47,7 +47,7 @@ export function resolveEffectiveMixedPort(dnsYaml: string, mixedPort: number): n
 function parseBaseYamlRecord(dnsYaml: string): Record<string, unknown> | null {
   if (!dnsYaml.trim()) return null;
   try {
-    const parsed = yaml.load(dnsYaml) as unknown;
+    const parsed = loadMihomoYaml(dnsYaml);
     return isRecord(parsed) ? parsed : null;
   } catch {
     return null;

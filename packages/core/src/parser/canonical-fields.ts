@@ -1,4 +1,6 @@
 import type { ParsedNode } from "@subboost/core/types/node";
+import { normalizeCertificateFingerprint } from "@subboost/core/mihomo/certificate-fingerprint";
+import { normalizeProtocolFields } from "../mihomo/protocol-fields";
 
 type FieldPath = readonly string[];
 
@@ -8,7 +10,7 @@ interface AliasRule {
   aliases: readonly FieldPath[];
 }
 
-const CLIENT_FINGERPRINT_TYPES = ["vmess", "vless", "trojan", "anytls"] as const;
+const CLIENT_FINGERPRINT_TYPES = ["vmess", "vless", "trojan", "anytls", "trusttunnel"] as const;
 const PACKET_ENCODING_TYPES = ["vmess", "vless"] as const;
 const GRPC_SERVICE_NAME_TYPES = ["vmess", "vless", "trojan"] as const;
 
@@ -39,6 +41,11 @@ export const PROTOCOL_FIELD_ALIAS_RULES: readonly AliasRule[] = [
       ["short_id"],
       ["shortid"],
     ],
+  },
+  {
+    types: ["vless"],
+    canonical: ["reality-opts", "support-x25519mlkem768"],
+    aliases: [["reality-opts", "supportX25519MLKEM768"], ["reality-opts", "support_x25519mlkem768"]],
   },
   {
     types: CLIENT_FINGERPRINT_TYPES,
@@ -187,18 +194,23 @@ export function canonicalizeParsedNode<T extends ParsedNode | Record<string, unk
   if (!isRecord(node)) return node;
   const type = typeof node.type === "string" ? node.type.trim().toLowerCase() : "";
   const out: Record<string, unknown> = { ...node };
+  const hasCertificateFingerprint = normalizeCertificateFingerprint(out.fingerprint) !== null;
 
   for (const rule of PROTOCOL_FIELD_ALIAS_RULES) {
     if (!ruleApplies(rule, type)) continue;
-    const value = pickAliasValue(out, [rule.canonical, ...rule.aliases]);
+    // A certificate hash is an independent TLS field, not a client fingerprint alias.
+    const aliases = hasCertificateFingerprint
+      ? rule.aliases.filter((alias) => !pathEquals(alias, ["fingerprint"]))
+      : rule.aliases;
+    const value = pickAliasValue(out, [rule.canonical, ...aliases]);
     if (!hasValue(value)) continue;
     setPath(out, rule.canonical, value);
-    for (const alias of rule.aliases) {
+    for (const alias of aliases) {
       if (!pathEquals(alias, rule.canonical)) deletePath(out, alias);
     }
   }
 
   canonicalizeSkipCertVerify(out);
 
-  return out as T;
+  return normalizeProtocolFields(out) as T;
 }

@@ -95,6 +95,10 @@ export function VisualGraph() {
     () => customProxyGroups.filter((group) => group && group.enabled !== false),
     [customProxyGroups],
   );
+  const literalTargetNames = React.useMemo(
+    () => customProxyGroups.flatMap((group) => typeof group?.name === "string" ? [group.name] : []),
+    [customProxyGroups],
+  );
 
   React.useEffect(() => {
     const el = containerRef.current;
@@ -124,6 +128,13 @@ export function VisualGraph() {
       return resolveProxyGroupModuleName(m, proxyGroupNameOverrides?.[m.id]);
     },
     [proxyGroupNameOverrides],
+  );
+  const moduleNames = React.useMemo(
+    () =>
+      Object.fromEntries(
+        PROXY_GROUP_MODULES.map((module) => [module.id, resolveModuleName(module)]),
+      ),
+    [resolveModuleName],
   );
 
   // 节点名称列表
@@ -169,10 +180,6 @@ export function VisualGraph() {
       if (!g || typeof g.name !== "string" || !g.name.trim()) continue;
       customByName.set(g.name.trim(), g);
     }
-    const moduleNames = Object.fromEntries(
-      PROXY_GROUP_MODULES.map((module) => [module.id, resolveModuleName(module)]),
-    );
-
     const base = generatedProxyGroups.map((g) => {
       const groupName = typeof g.name === "string" ? g.name.trim() : "";
       const mod = groupName ? moduleByName.get(groupName) : undefined;
@@ -186,6 +193,7 @@ export function VisualGraph() {
                 ? resolveProxyGroupTargetName(edit.target, {
                     moduleNames,
                     customProxyGroups: activeCustomProxyGroups,
+                    literalTargetNames,
                     fallbackTarget: moduleTarget,
                   })
                 : moduleTarget;
@@ -202,6 +210,7 @@ export function VisualGraph() {
                 resolveProxyGroupTargetName(ruleSet.target, {
                   moduleNames,
                   customProxyGroups: activeCustomProxyGroups,
+                  literalTargetNames,
                 }) === moduleTarget,
             )
             .map((ruleSet) => ({
@@ -214,6 +223,7 @@ export function VisualGraph() {
               ? resolveProxyGroupTargetName(edit.target, {
                   moduleNames,
                   customProxyGroups: activeCustomProxyGroups,
+                  literalTargetNames,
                 })
               : "";
             if (edit?.enabled === false || target !== moduleTarget) return [];
@@ -253,6 +263,7 @@ export function VisualGraph() {
               resolveProxyGroupTargetName(ruleSet.target, {
                 moduleNames,
                 customProxyGroups: activeCustomProxyGroups,
+                literalTargetNames,
               }) === groupName,
           )
           .map((r) => ({
@@ -343,6 +354,8 @@ export function VisualGraph() {
     builtinRuleEdits,
     proxyGroupAdvanced,
     proxyGroupOrder,
+    moduleNames,
+    literalTargetNames,
     resolveModuleName,
   ]);
 
@@ -362,8 +375,9 @@ export function VisualGraph() {
         customRuleSets,
         customProxyGroups: activeCustomProxyGroups,
         proxyGroupNameOverrides,
+        literalTargetNames,
       }),
-    [activeCustomProxyGroups, customRuleSets, proxyGroupNameOverrides],
+    [activeCustomProxyGroups, customRuleSets, proxyGroupNameOverrides, literalTargetNames],
   );
 
   // 注意：`containerRef` 有 `p-4`，Safari 上用 `clientWidth` 会把 padding 算进去，导致阈值判断偏大；
@@ -408,7 +422,7 @@ export function VisualGraph() {
 
   if (effectiveNodes.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-white/50">
+      <div className="flex flex-col items-center justify-center h-full text-fg-50">
         <Network className="h-12 w-12 mb-3 opacity-50" />
         <p className="text-sm">添加节点后显示可视化关系图</p>
       </div>
@@ -418,11 +432,11 @@ export function VisualGraph() {
   return (
     <div ref={containerRef} className="h-full overflow-auto p-4 space-y-3">
       {/* 图例 */}
-      <div className="flex flex-wrap gap-2 pb-3 border-b border-white/10">
+      <div className="flex flex-wrap gap-2 pb-3 border-b border-ink/10">
         {legendItems.map((item) => (
           <div
             key={item.id}
-            className="flex items-center gap-1.5 text-[10px] text-white/60"
+            className="flex items-center gap-1.5 text-[10px] text-fg-60"
           >
             <div className={cn("w-2.5 h-2.5 rounded", item.dotClass)} />
             <span>{item.label}</span>
@@ -432,23 +446,23 @@ export function VisualGraph() {
 
       {/* 统计信息 */}
       <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-lg bg-white/5 p-2">
-          <div className="text-lg font-bold text-primary-500">
+        <div className="rounded-lg bg-ink/5 p-2">
+          <div className="text-lg font-bold text-preview-node-count-fg">
             {effectiveNodes.length}
           </div>
-          <div className="text-[10px] text-white/50">节点</div>
+          <div className="text-[10px] text-fg-50">节点</div>
         </div>
-        <div className="rounded-lg bg-white/5 p-2">
-          <div className="text-lg font-bold text-green-500">
+        <div className="rounded-lg bg-ink/5 p-2">
+          <div className="text-lg font-bold text-preview-group-count-fg">
             {displayGroups.length}
           </div>
-          <div className="text-[10px] text-white/50">代理组</div>
+          <div className="text-[10px] text-fg-50">代理组</div>
         </div>
-        <div className="rounded-lg bg-white/5 p-2">
+        <div className="rounded-lg bg-ink/5 p-2">
           <div className="text-lg font-bold text-purple-500">
             {displayGroups.reduce((acc, g) => acc + g.rules.length, 0)}
           </div>
-          <div className="text-[10px] text-white/50">规则集</div>
+          <div className="text-[10px] text-fg-50">规则集</div>
         </div>
       </div>
 
@@ -467,25 +481,25 @@ export function VisualGraph() {
 
       {/* 节点列表预览 */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between text-xs font-medium text-white/60">
+        <div className="flex items-center justify-between text-xs font-medium text-fg-60">
           <span className="flex items-center gap-2">
             <Server className="h-3.5 w-3.5" />
             节点列表
           </span>
-          <span className="text-[10px] text-white/50">
+          <span className="text-[10px] text-fg-50">
             共 {effectiveNodes.length} 个
           </span>
         </div>
 
-        <div className="max-h-48 overflow-y-auto space-y-1 rounded-lg bg-white/5 p-2">
+        <div className="max-h-48 overflow-y-auto space-y-1 rounded-lg bg-ink/5 p-2">
           {effectiveNodes.slice(0, 50).map((node, idx) => (
             <div
               key={node.name + idx}
-              className="flex items-center gap-2 rounded-md px-2 py-1 text-[10px] hover:bg-white/5"
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-[10px] hover:bg-ink/5"
             >
               <div
                 className={cn(
-                  "h-2 w-2 rounded-full flex-shrink-0 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]",
+                  "h-2 w-2 rounded-full flex-shrink-0 shadow-[0_0_0_3px_color-mix(in_oklab,var(--ink)_3%,transparent)]",
                   node.type === "ss"
                     ? "bg-blue-400"
                     : node.type === "vmess"
@@ -502,7 +516,7 @@ export function VisualGraph() {
                 )}
               />
               <span
-                className="min-w-0 flex-1 truncate text-white/90 font-medium"
+                className="min-w-0 flex-1 truncate text-fg-90 font-medium"
                 title={node.name}
               >
                 {node.name}
@@ -511,7 +525,7 @@ export function VisualGraph() {
             </div>
           ))}
           {effectiveNodes.length > 50 && (
-            <div className="text-center text-[10px] text-white/50 py-1">
+            <div className="text-center text-[10px] text-fg-50 py-1">
               ... 还有 {effectiveNodes.length - 50} 个节点
             </div>
           )}
@@ -521,6 +535,9 @@ export function VisualGraph() {
       <CustomRulesPreview
         customRules={customRules}
         ruleSets={customRoutingRuleSets}
+        moduleNames={moduleNames}
+        customProxyGroups={activeCustomProxyGroups}
+        literalTargetNames={literalTargetNames}
       />
     </div>
   );

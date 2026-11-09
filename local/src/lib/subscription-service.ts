@@ -13,6 +13,7 @@ import type { ParsedNode } from "@subboost/core/types/node";
 import {
   buildManualRefreshFailureResponse,
   buildManualRefreshSuccessResponseBody,
+  createResetSubscriptionAutoUpdateState,
   normalizeSubscriptionConfigForPersistence,
   normalizeSubscriptionInfoForPersistence,
   normalizeSubscriptionName,
@@ -57,6 +58,10 @@ export type SubscriptionRow = {
     failureSourceState: string | null;
     lastFailedAt: Date | null;
     lastAttemptedAt: Date | null;
+    nodeQuotaFailureCount: number;
+    lastNodeQuotaExceededAt: Date | null;
+    lastNodeQuotaActual: number | null;
+    lastNodeQuotaLimit: number | null;
     disabledAt: Date | null;
     disabledReason: string | null;
     disabledPreviousInterval: number | null;
@@ -84,6 +89,10 @@ export type SubscriptionSummary = {
     externalFailureCount: number;
     lastFailedAt: string | null;
     lastAttemptedAt: string | null;
+    nodeQuotaFailureCount: number;
+    lastNodeQuotaExceededAt: string | null;
+    lastNodeQuotaActual: number | null;
+    lastNodeQuotaLimit: number | null;
     disabledAt: string | null;
     disabledReason: string | null;
     disabledPreviousInterval: number | null;
@@ -296,15 +305,7 @@ export async function updateSubscription(ownerId: string, id: string, body: unkn
       await tx.subscriptionAutoUpdateState.upsert({
         where: { subscriptionId: current.id },
         create: { subscriptionId: current.id },
-        update: {
-          externalFailureCount: 0,
-          failureSourceState: null,
-          lastFailedAt: null,
-          lastAttemptedAt: null,
-          disabledAt: null,
-          disabledReason: null,
-          disabledPreviousInterval: null,
-        },
+        update: createResetSubscriptionAutoUpdateState(),
       });
     }
     return tx.subscription.update({
@@ -329,6 +330,26 @@ export async function deleteSubscription(ownerId: string, id: string): Promise<b
   if (!row) return false;
   await prisma.subscription.delete({ where: { id: row.id } });
   return true;
+}
+
+export async function resetSubscriptionLink(ownerId: string, id: string, expectedToken: string) {
+  const token = generateLocalSubscriptionToken();
+  const result = await prisma.subscription.updateMany({
+    where: { id, ownerId, token: expectedToken },
+    data: { token },
+  });
+  if (result.count !== 1) {
+    const exists = await prisma.subscription.findFirst({ where: { id, ownerId }, select: { id: true } });
+    return { status: exists ? "stale" as const : "not_found" as const };
+  }
+  return {
+    status: "updated" as const,
+    subscription: {
+      id, token,
+      subscriptionUrl: buildLocalSubscriptionUrl(token),
+      shadowrocketUrl: buildLocalShadowrocketUrl(token),
+    },
+  };
 }
 
 export function buildSubscriptionFetchCallbacks() {
@@ -378,7 +399,7 @@ async function persistRefreshSuccess(params: {
       where: { id: params.subscriptionId, updatedAt: params.expectedUpdatedAt },
       data: {
         encryptedNodes: encryptJson(params.snapshot.nodes),
-        encryptedConfig: encryptJson({ ...params.config, sources: params.snapshot.savedSources }),
+        encryptedConfig: encryptJson(params.config),
         encryptedSubscriptionInfo: encryptJson(params.snapshot.subscriptionInfo),
         lastUpdatedAt: params.cachedAt,
         cacheExpiresAt: buildSubscriptionCacheExpiry(params.cachedAt),
@@ -389,15 +410,7 @@ async function persistRefreshSuccess(params: {
     await tx.subscriptionAutoUpdateState.upsert({
       where: { subscriptionId: params.subscriptionId },
       create: { subscriptionId: params.subscriptionId },
-      update: {
-        externalFailureCount: 0,
-        failureSourceState: null,
-        lastFailedAt: null,
-        lastAttemptedAt: null,
-        disabledAt: null,
-        disabledReason: null,
-        disabledPreviousInterval: null,
-      },
+      update: createResetSubscriptionAutoUpdateState(),
     });
     return true;
   });
@@ -435,7 +448,7 @@ export async function refreshSubscription(ownerId: string, id: string) {
     subscriptionId: row.id,
     expectedUpdatedAt: row.updatedAt,
     snapshot,
-    config: secrets.config,
+    config: refreshResult.refreshedConfig,
     cachedAt,
   });
   if (!persisted) {

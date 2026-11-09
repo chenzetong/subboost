@@ -3,6 +3,10 @@ export interface SubscriptionAutoUpdateState {
   failureSourceState?: string | null;
   lastFailedAt: string | null;
   lastAttemptedAt?: string | null;
+  nodeQuotaFailureCount: number;
+  lastNodeQuotaExceededAt: string | null;
+  lastNodeQuotaActual: number | null;
+  lastNodeQuotaLimit: number | null;
   disabledAt: string | null;
   disabledReason: string | null;
   disabledPreviousInterval: number | null;
@@ -34,3 +38,5 @@ export interface RefreshSubscriptionResponse {
   attemptedUrlFetch?: boolean;
   usedUrlFetch?: boolean;
 }
+
+export type SubscriptionLink = Pick<Subscription, "id" | "token" | "subscriptionUrl" | "shadowrocketUrl">;

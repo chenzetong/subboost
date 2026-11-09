@@ -141,6 +141,32 @@ async function completeAllSourcesFailed(params: {
   return params.decision.outcome;
 }
 
+async function completeNodeQuotaExceeded(params: {
+  subscription: AutoUpdateSubscriptionRow;
+  prepared: PreparedLocalRefresh;
+  decision: Extract<ReturnType<typeof resolveAutomaticRefreshCompletionDecision>, { kind: "node_quota_exceeded" }>;
+  assertLease?: () => Promise<void>;
+}): Promise<CronUpdateOutcome> {
+  const state = params.decision.nextAutoUpdateState.state;
+  const persisted = await writeAutoUpdateState(
+    params.subscription.id,
+    params.subscription.updatedAt,
+    state,
+    { ...(params.decision.nextAutoUpdateState.shouldDisableAutoUpdate ? { autoUpdateInterval: null } : {}) },
+    params.assertLease
+  );
+  if (!persisted) return staleOutcome(params.prepared.requestedHosts);
+
+  console.warn("[local-subscription-cron] node quota exceeded", {
+    subscriptionId: params.subscription.id,
+    actualNodeCount: state.lastNodeQuotaActual,
+    effectiveNodeLimit: state.lastNodeQuotaLimit,
+    nodeQuotaFailureCount: state.nodeQuotaFailureCount,
+    autoUpdateDisabled: params.decision.nextAutoUpdateState.shouldDisableAutoUpdate,
+  });
+  return params.decision.outcome;
+}
+
 async function completeSuccess(params: {
   subscription: AutoUpdateSubscriptionRow;
   prepared: PreparedLocalRefresh;
@@ -161,15 +187,13 @@ async function completeSuccess(params: {
     maxNodesPerSubscription: MAX_NODES_PER_SUBSCRIPTION,
   });
   if (decision.kind !== "success") throw new Error(`Unexpected refresh completion decision: ${decision.kind}`);
-  const config = { ...params.prepared.config, sources: params.prepared.snapshot.savedSources };
-
   const persisted = await writeAutoUpdateState(
     params.subscription.id,
     params.subscription.updatedAt,
     decision.nextAutoUpdateState.state,
     {
       encryptedNodes: encryptJson(refreshResult.cacheEntry.nodes),
-      encryptedConfig: encryptJson(config),
+      encryptedConfig: encryptJson(refreshResult.refreshedConfig),
       encryptedSubscriptionInfo: encryptJson(refreshResult.cacheEntry.subscriptionInfo),
       lastUpdatedAt: cachedAt,
       cacheExpiresAt: buildSubscriptionCacheExpiry(cachedAt),
@@ -212,6 +236,9 @@ async function completeLocalRefresh(params: {
     if (decision.kind === "all_sources_failed") {
       return completeAllSourcesFailed({ ...params, decision });
     }
+    if (decision.kind === "node_quota_exceeded") {
+      return completeNodeQuotaExceeded({ ...params, decision });
+    }
     if (decision.kind === "success") throw new Error("Unexpected successful completion decision");
 
     const persisted = await writeAutoUpdateState(
@@ -233,6 +260,7 @@ async function recordUnexpectedFailure(params: {
   requestedHosts: string[];
   error: unknown;
   attemptStartedAt: Date | null;
+  currentAutoUpdateState: SubscriptionAutoUpdateStateFields;
   assertLease?: () => Promise<void>;
 }): Promise<CronUpdateOutcome> {
   const completion = resolveAutomaticRefreshUnexpectedFailureCompletion({
@@ -240,6 +268,7 @@ async function recordUnexpectedFailure(params: {
     requestedHosts: params.requestedHosts,
     error: params.error,
     attemptStartedAt: params.attemptStartedAt,
+    currentAutoUpdateState: params.currentAutoUpdateState,
   });
   if (completion.attemptedState) {
     const persisted = await writeAutoUpdateState(
@@ -318,6 +347,7 @@ export async function runLocalSubscriptionAutoUpdateCron(
           requestedHosts,
           error,
           attemptStartedAt,
+          currentAutoUpdateState: resolveSubscriptionAutoUpdateState(subscription),
           assertLease: options.assertLease,
         })
       );

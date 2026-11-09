@@ -1,4 +1,4 @@
-import yaml from "js-yaml";
+import { loadMihomoYaml } from "../config/yaml-schema";
 
 export type GeneratedYamlSemanticSeverity = "none" | "format-only" | "low" | "high";
 
@@ -110,7 +110,7 @@ function formatYamlParseError(error: unknown): string {
 export function parseGeneratedYamlSemantics(yamlText: string): GeneratedYamlSemanticSnapshot {
   let parsed: unknown;
   try {
-    parsed = yaml.load(yamlText || "");
+    parsed = loadMihomoYaml(yamlText || "");
   } catch (error) {
     throw new GeneratedYamlSemanticError(`Generated YAML parse failed: ${formatYamlParseError(error)}`);
   }

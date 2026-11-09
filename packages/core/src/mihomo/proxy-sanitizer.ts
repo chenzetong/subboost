@@ -1,19 +1,22 @@
 import type { ParsedNode } from "@subboost/core/types/node";
 import { splitWsPathEarlyData } from "@subboost/core/parser/ws-early-data";
 import { isMihomoEchQueryServerName, isStandardBase64String } from "./ech";
-import { normalizeRealityShortId } from "./reality";
+import { isRealityPublicKey, normalizeRealityShortId } from "./reality";
+import { isVlessMlkemEncryption } from "./vless-encryption";
+import { normalizeXhttpFields } from "./xhttp";
+import { normalizeProtocolFields } from "./protocol-fields";
+import { normalizeCertificateFingerprint } from "./certificate-fingerprint";
+import { getNodeEndpointError } from "../node-endpoint";
+import { MIHOMO_STRING_SCALAR_FIELDS, normalizeMihomoStringScalar } from "./string-scalar";
 
-const REALITY_PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const WIREGUARD_KEY_PATTERN = /^[A-Za-z0-9+/]{43}=$/;
-const CERTIFICATE_FINGERPRINT_HEX_PATTERN = /^[A-Fa-f0-9]{64}$/;
 const SSH_SERVER_FINGERPRINT_PATTERN = /^SHA256:[A-Za-z0-9+/]{43}=?$/;
-const VLESS_ENCRYPTION_PATTERN =
-  /^mlkem768x25519plus\.(?:native|xorpub|random)\.(?:1rtt|0rtt)\.[A-Za-z0-9+/=_-]+(?:\.[A-Za-z0-9+/=_-]+)*$/;
 const BOOLEAN_PROXY_FIELDS = new Set([
   "udp",
   "tls",
   "skip-cert-verify",
   "tfo",
+  "fast-open",
   "mptcp",
   "reuse",
   "disable-sni",
@@ -22,9 +25,9 @@ const BOOLEAN_PROXY_FIELDS = new Set([
   "global-padding",
   "udp-over-tcp",
 ]);
-const CLIENT_FINGERPRINT_PROXY_TYPES = new Set(["vmess", "vless", "trojan", "anytls"]);
+const CLIENT_FINGERPRINT_PROXY_TYPES = new Set(["vmess", "vless", "trojan", "anytls", "trusttunnel"]);
 const CLIENT_FINGERPRINT_ALIASES = new Set(["chrome", "firefox", "safari", "ios", "android", "edge", "random", "none"]);
-const UNSUPPORTED_MIHOMO_PROXY_TYPES = new Set(["socks4", "h2-connect", "trust-tunnel", "trusttunnel", "external"]);
+const UNSUPPORTED_MIHOMO_PROXY_TYPES = new Set(["socks4", "h2-connect", "trust-tunnel", "external"]);
 const INVALID_MIHOMO_NODE_FLAG = "_subboost-invalid-mihomo-node";
 const REQUIRED_STRING_FIELDS_BY_TYPE: Record<string, string[]> = {
   ss: ["cipher", "password"],
@@ -72,16 +75,6 @@ function normalizeClientFingerprintAlias(value: unknown): string | null {
   return normalized;
 }
 
-function normalizeCertificateFingerprint(value: unknown): string | null {
-  const raw = normalizeString(value);
-  if (!raw) return null;
-  const withoutPrefix = raw
-    .replace(/^sha256\s+fingerprint\s*=\s*/i, "")
-    .replace(/^sha256[:=]\s*/i, "");
-  const compact = withoutPrefix.replace(/:/g, "").toLowerCase();
-  return CERTIFICATE_FINGERPRINT_HEX_PATTERN.test(compact) ? compact : null;
-}
-
 function normalizeWireGuardKey(value: unknown): string | null {
   const normalized = normalizeString(value);
   if (!normalized || !WIREGUARD_KEY_PATTERN.test(normalized)) return null;
@@ -127,6 +120,7 @@ function findWhitespaceIndex(value: string): number {
 
 function isSupportedSshHostKeyType(value: string): boolean {
   if (value === "ssh-ed25519" || value === "ssh-rsa" || value === "ssh-dss") return true;
+  if (["ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"].includes(value)) return true;
   return value.startsWith("ssh-ecdsa-") && isAsciiAlphaNumericOrHyphen(value.slice("ssh-ecdsa-".length));
 }
 
@@ -162,7 +156,7 @@ export { isStandardBase64String } from "./ech";
 
 export function normalizeMihomoRealityPublicKey(input: unknown): string | null {
   const value = normalizeString(input);
-  if (!value || !REALITY_PUBLIC_KEY_PATTERN.test(value)) return null;
+  if (!value || !isRealityPublicKey(value)) return null;
   return value;
 }
 
@@ -171,10 +165,16 @@ export function isMihomoSupportedProxyNode(node: unknown): boolean {
   const type = typeof node.type === "string" ? node.type : "";
   if (node[INVALID_MIHOMO_NODE_FLAG]) return false;
   if (!type || UNSUPPORTED_MIHOMO_PROXY_TYPES.has(type)) return false;
+  if (getNodeEndpointError(node)) return false;
+  try {
+    normalizeProtocolFields(node);
+  } catch {
+    return false;
+  }
 
   const requiredFields = REQUIRED_STRING_FIELDS_BY_TYPE[type] || [];
   for (const field of requiredFields) {
-    if (!normalizeString(node[field])) return false;
+    if (!normalizeString(normalizeMihomoStringScalar(node[field]))) return false;
   }
 
   if (type === "wireguard") {
@@ -184,11 +184,16 @@ export function isMihomoSupportedProxyNode(node: unknown): boolean {
         return false;
       }
     }
+    if (Array.isArray(node.peers) && node.peers.some((peer) => !isPlainObject(peer) ||
+      !normalizeWireGuardKey(peer["public-key"]) ||
+      (peer["pre-shared-key"] !== undefined && !normalizeWireGuardKey(peer["pre-shared-key"])))) return false;
   }
 
-  if (type === "ssh" && !normalizeString(node.password) && !normalizePemPrivateKey(node["private-key"])) {
+  if (type === "ssh" && !normalizeString(normalizeMihomoStringScalar(node.password)) && !normalizePemPrivateKey(node["private-key"])) {
     return false;
   }
+  if (type === "ssh" && hasOwn(node, "host-key") && node["host-key"] !== undefined &&
+    !(Array.isArray(node["host-key"]) && node["host-key"].length === 0) && !normalizeSshHostKeys(node["host-key"])) return false;
 
   if (!isSupportedSsPlugin(node)) return false;
 
@@ -198,9 +203,7 @@ export function isMihomoSupportedProxyNode(node: unknown): boolean {
     }
 
     if (String(node.network ?? "") === "xhttp") {
-      const mainHasReality =
-        hasOwn(node, "reality-opts") && node["reality-opts"] !== undefined && sanitizeRealityOpts(node["reality-opts"]) !== undefined;
-      const xhttp = normalizeXhttpOptsForGeneration(node["xhttp-opts"], mainHasReality);
+      const xhttp = normalizeXhttpOptsForGeneration(node["xhttp-opts"]);
       if (xhttp.invalid) return false;
     }
   }
@@ -223,14 +226,6 @@ function normalizeAlpn(value: unknown): string[] | undefined {
     .map((item) => item.trim())
     .filter(Boolean);
   return protocols.length > 0 ? protocols : undefined;
-}
-
-function normalizeWireGuardReserved(value: unknown): number[] | undefined {
-  const rawValues = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
-  const values = rawValues.map((item) => Number.parseInt(String(item).trim(), 10));
-  if (values.length !== 3) return undefined;
-  if (!values.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) return undefined;
-  return values;
 }
 
 function sanitizeEchOpts(value: unknown): unknown {
@@ -268,6 +263,13 @@ function sanitizeEchOpts(value: unknown): unknown {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function sanitizeRealitySupport(out: Record<string, unknown>): void {
+  if (!hasOwn(out, "support-x25519mlkem768")) return;
+  const support = parseBoolish(out["support-x25519mlkem768"]);
+  if (support === undefined) delete out["support-x25519mlkem768"];
+  else out["support-x25519mlkem768"] = support;
+}
+
 function sanitizeRealityOpts(value: unknown): unknown {
   if (!isPlainObject(value)) return undefined;
 
@@ -275,6 +277,7 @@ function sanitizeRealityOpts(value: unknown): unknown {
   const publicKey = normalizeMihomoRealityPublicKey(out["public-key"]);
   if (!publicKey) return undefined;
   out["public-key"] = publicKey;
+  sanitizeRealitySupport(out);
 
   const shortId = normalizeRealityShortId(out["short-id"]);
   if (shortId) out["short-id"] = shortId;
@@ -313,15 +316,14 @@ function sanitizeWsOpts(value: unknown): unknown {
 }
 
 function sanitizeDownloadRealityOpts(
-  value: unknown,
-  mainHasReality: boolean
+  value: unknown
 ): { value?: Record<string, unknown>; invalid: boolean } {
   if (!isPlainObject(value)) return { invalid: true };
 
   const out: Record<string, unknown> = { ...value };
   const rawPublicKey = normalizeString(out["public-key"]);
   if (!rawPublicKey) {
-    if (out["public-key"] === "" && mainHasReality) {
+    if (out["public-key"] === "") {
       return { value: { "public-key": "" }, invalid: false };
     }
     return { invalid: true };
@@ -330,6 +332,7 @@ function sanitizeDownloadRealityOpts(
   const publicKey = normalizeMihomoRealityPublicKey(rawPublicKey);
   if (!publicKey) return { invalid: true };
   out["public-key"] = publicKey;
+  sanitizeRealitySupport(out);
 
   const shortId = normalizeRealityShortId(out["short-id"]);
   if (shortId) out["short-id"] = shortId;
@@ -339,12 +342,16 @@ function sanitizeDownloadRealityOpts(
 }
 
 function normalizeXhttpOptsForGeneration(
-  value: unknown,
-  mainHasReality: boolean
+  value: unknown
 ): { value?: Record<string, unknown>; invalid: boolean } {
   if (!isPlainObject(value)) return { invalid: false };
 
-  const out: Record<string, unknown> = { ...value };
+  let out: Record<string, unknown>;
+  try {
+    out = normalizeXhttpFields(value);
+  } catch {
+    return { invalid: true };
+  }
   const mode = normalizeString(out.mode)?.toLowerCase();
   const downloadSettings = isPlainObject(out["download-settings"])
     ? { ...(out["download-settings"] as Record<string, unknown>) }
@@ -366,11 +373,9 @@ function normalizeXhttpOptsForGeneration(
     }
 
     if (hasOwn(downloadSettings, "reality-opts")) {
-      const reality = sanitizeDownloadRealityOpts(downloadSettings["reality-opts"], mainHasReality);
+      const reality = sanitizeDownloadRealityOpts(downloadSettings["reality-opts"]);
       if (reality.invalid) return { invalid: true };
       if (reality.value) downloadSettings["reality-opts"] = reality.value;
-    } else if (mainHasReality) {
-      downloadSettings["reality-opts"] = { "public-key": "" };
     }
 
     out["download-settings"] = downloadSettings;
@@ -394,7 +399,7 @@ function sanitizeVlessEncryption(value: unknown): unknown {
   if (!encryption) return undefined;
   if (encryption === "none") return encryption;
   if (!encryption.startsWith("mlkem768x25519plus")) return encryption;
-  return VLESS_ENCRYPTION_PATTERN.test(encryption) ? encryption : undefined;
+  return isVlessMlkemEncryption(encryption) ? encryption : undefined;
 }
 
 export function normalizeMihomoVlessForGeneration(node: Record<string, unknown>): Record<string, unknown> {
@@ -403,7 +408,6 @@ export function normalizeMihomoVlessForGeneration(node: Record<string, unknown>)
   const copy: Record<string, unknown> = { ...node };
   const hasRealityField = hasOwn(copy, "reality-opts") && copy["reality-opts"] !== undefined;
   const realityOpts = hasRealityField ? sanitizeRealityOpts(copy["reality-opts"]) : undefined;
-  const mainHasReality = Boolean(realityOpts);
 
   if (hasRealityField) {
     if (!realityOpts) {
@@ -418,7 +422,7 @@ export function normalizeMihomoVlessForGeneration(node: Record<string, unknown>)
   }
 
   if (String(copy.network ?? "") === "xhttp" && hasOwn(copy, "xhttp-opts")) {
-    const xhttp = normalizeXhttpOptsForGeneration(copy["xhttp-opts"], mainHasReality);
+    const xhttp = normalizeXhttpOptsForGeneration(copy["xhttp-opts"]);
     if (xhttp.invalid) {
       copy[INVALID_MIHOMO_NODE_FLAG] = true;
     } else if (xhttp.value) {
@@ -434,7 +438,19 @@ export function normalizeMihomoVlessForGeneration(node: Record<string, unknown>)
 export function sanitizeMihomoProxyNode(node: ParsedNode | Record<string, unknown>): Record<string, unknown> {
   if (!isPlainObject(node)) return node as Record<string, unknown>;
 
-  const copy: Record<string, unknown> = { ...node };
+  let copy: Record<string, unknown>;
+  try {
+    copy = normalizeProtocolFields(node);
+  } catch {
+    return { ...node, [INVALID_MIHOMO_NODE_FLAG]: true };
+  }
+
+  for (const field of MIHOMO_STRING_SCALAR_FIELDS) {
+    if (copy[field] === undefined || copy[field] === null) continue;
+    const value = normalizeMihomoStringScalar(copy[field]);
+    if (value === undefined) copy[INVALID_MIHOMO_NODE_FLAG] = true;
+    else copy[field] = value;
+  }
 
   for (const key of BOOLEAN_PROXY_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(copy, key)) continue;
@@ -501,11 +517,6 @@ export function sanitizeMihomoProxyNode(node: ParsedNode | Record<string, unknow
       else delete copy[key];
     }
 
-    if (Object.prototype.hasOwnProperty.call(copy, "reserved")) {
-      const reserved = normalizeWireGuardReserved(copy.reserved);
-      if (reserved) copy.reserved = reserved;
-      else delete copy.reserved;
-    }
   }
 
   if (type === "ssh" && Object.prototype.hasOwnProperty.call(copy, "private-key")) {
@@ -517,10 +528,13 @@ export function sanitizeMihomoProxyNode(node: ParsedNode | Record<string, unknow
     }
   }
 
-  if (type === "ssh" && Object.prototype.hasOwnProperty.call(copy, "host-key")) {
+  if (type === "ssh" && Object.prototype.hasOwnProperty.call(copy, "host-key") && copy["host-key"] !== undefined) {
     const hostKeys = normalizeSshHostKeys(copy["host-key"]);
     if (hostKeys) copy["host-key"] = hostKeys;
-    else delete copy["host-key"];
+    else if (!Array.isArray(copy["host-key"]) || copy["host-key"].length > 0) {
+      copy[INVALID_MIHOMO_NODE_FLAG] = true;
+      delete copy["host-key"];
+    }
   }
 
   if (type === "ssh" && Object.prototype.hasOwnProperty.call(copy, "server-fingerprint")) {

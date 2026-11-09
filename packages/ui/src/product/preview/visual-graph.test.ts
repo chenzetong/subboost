@@ -216,6 +216,15 @@ describe("VisualGraph", () => {
     expect(mocks.captures.customRulesPreview).toEqual({
       customRules: [{ id: "manual" }],
       ruleSets: [{ id: "rs1" }],
+      moduleNames: {
+        select: "🚀 节点选择",
+        auto: "⚡ 自动选择",
+        ad: "🛑 广告拦截",
+      },
+      customProxyGroups: [
+        expect.objectContaining({ id: "custom-1", name: "🧩 Custom" }),
+      ],
+      literalTargetNames: ["🧩 Custom"],
     });
 
     const preview = mocks.captures.proxyGroupsPreview;
@@ -266,6 +275,13 @@ describe("VisualGraph", () => {
     expect(mocks.captures.customRulesPreview).toEqual({
       customRules: [],
       ruleSets: [],
+      moduleNames: {
+        select: "🚀 节点选择",
+        auto: "⚡ 自动选择",
+        ad: "🛑 广告拦截",
+      },
+      customProxyGroups: [],
+      literalTargetNames: [],
     });
   });
 

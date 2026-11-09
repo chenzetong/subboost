@@ -122,6 +122,7 @@ describe("useSubscriptionLink", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: originalWindow,
@@ -272,6 +273,24 @@ describe("useSubscriptionLink", () => {
     expect(mocks.bag.interactions.subscriptionLinkSaved).toHaveBeenCalledWith(
       expect.objectContaining({ result: "success", autoUpdateEnabled: true })
     );
+  });
+
+  it.each(["success", "unauthorized", "rejected"])("ignores a late %s save after the draft is reset", async (kind) => {
+    const clearUser = vi.fn();
+    const adapter = makeAdapter({ saveSubscription: vi.fn(async () => {
+      mocks.bag.storeState.draftRevision = 1;
+      if (kind === "rejected") throw new Error("late request");
+      return response(kind === "unauthorized" ? 401 : 200, { subscription: { token: "late", subscriptionUrl: "https://local.subboost.test/s/late" } });
+    }) });
+    let hook = useRenderedHook({ subscriptionAdapter: adapter, clearUser });
+    hook.setSubscriptionName("Saved draft");
+    hook = useRenderedHook({ subscriptionAdapter: adapter, clearUser });
+    await hook.handleCreateSubscription();
+    hook = useRenderedHook({ subscriptionAdapter: adapter, clearUser });
+    expect(hook.subscriptionUrl).toBe("");
+    expect(clearUser).not.toHaveBeenCalled();
+    expect(mocks.toast).not.toHaveBeenCalled();
+    expect(mocks.bag.interactions.subscriptionLinkSaved).not.toHaveBeenCalled();
   });
 
   it("allows adapter-specific decimal auto-update intervals", async () => {
@@ -586,8 +605,46 @@ describe("useSubscriptionLink", () => {
     );
   });
 
-  it("ignores empty copy requests and handles copy failures for editing links", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  it("falls back to legacy copy for subscription links on non-secure origins", async () => {
+    const textarea = {
+      value: "",
+      style: {} as Record<string, string>,
+      setAttribute: vi.fn(),
+      select: vi.fn(),
+      setSelectionRange: vi.fn(),
+      remove: vi.fn(),
+    };
+    const execCommand = vi.fn(() => true);
+    vi.stubGlobal("navigator", {});
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => textarea),
+      body: { appendChild: vi.fn() },
+      execCommand,
+    });
+
+    const editingSubscription = {
+      id: "sub-1",
+      token: "token-1",
+      name: "Existing",
+      autoUpdateInterval: null,
+      smartNodeMatchingEnabled: true,
+    };
+    let hook = useRenderedHook({ editingSubscription });
+    hook.setSubscriptionUrl("http://local.subboost.test/s/token-1");
+    hook = useRenderedHook({ editingSubscription });
+
+    await hook.handleCopyUrl();
+
+    expect(textarea.value).toBe("http://local.subboost.test/s/token-1");
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(mocks.bag.interactions.subscriptionLinkCopied).toHaveBeenCalledWith({
+      flow: "update",
+      mode: "quick",
+    });
+    expect(mocks.toast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" }));
+  });
+
+  it("ignores empty copy requests and reports copy failures for editing links", async () => {
     await useRenderedHook().handleCopyUrl();
     expect(globalThis.navigator.clipboard.writeText).not.toHaveBeenCalled();
 
@@ -607,7 +664,10 @@ describe("useSubscriptionLink", () => {
     await hook.handleCopyUrl();
 
     expect(globalThis.navigator.clipboard.writeText).toHaveBeenCalledWith("https://subboost.test/s/token-1");
-    expect(console.error).toHaveBeenCalledWith("Copy error:", error);
+    expect(mocks.toast).toHaveBeenCalledWith({
+      title: "复制失败，请手动复制订阅链接",
+      variant: "destructive",
+    });
     expect(mocks.bag.interactions.subscriptionLinkCopied).not.toHaveBeenCalledWith(
       expect.objectContaining({ flow: "update" })
     );

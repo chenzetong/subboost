@@ -8,9 +8,42 @@ export {
   getConfigDraftStorageNameForUser,
 } from "./draft-storage";
 
-export const CONFIG_DRAFT_STORAGE_VERSION = 10;
+export const CONFIG_DRAFT_STORAGE_VERSION = 12;
+
+export function isCompatibleConfigDraftVersion(version: unknown): boolean {
+  return version === 11 || version === CONFIG_DRAFT_STORAGE_VERSION;
+}
 
 type ConfigDraftStorage = Pick<Storage, "getItem" | "setItem">;
+
+export function createSafeConfigDraftStorage(
+  getStorage: () => Pick<Storage, "getItem" | "setItem" | "removeItem"> | null = () =>
+    typeof window === "undefined" ? null : window.localStorage
+) {
+  return {
+    getItem(key: string): string | null {
+      try {
+        return getStorage()?.getItem(key) ?? null;
+      } catch {
+        return null;
+      }
+    },
+    setItem(key: string, value: string): void {
+      try {
+        getStorage()?.setItem(key, value);
+      } catch {
+        // Keep the current in-memory draft editable when storage is unavailable.
+      }
+    },
+    removeItem(key: string): void {
+      try {
+        getStorage()?.removeItem(key);
+      } catch {
+        // Storage availability must not block clearing the persisted draft.
+      }
+    },
+  };
+}
 
 type PersistedEnvelope = {
   state?: unknown;
@@ -55,6 +88,7 @@ export function normalizePersistedConfigState(
     ...(typeof state.allowLan === "boolean" ? { allowLan: state.allowLan } : {}),
     ...(typeof state.testUrl === "string" ? { testUrl: state.testUrl } : {}),
     ...(typeof state.testInterval === "number" ? { testInterval: state.testInterval } : {}),
+    sharedHealthChecks: state.sharedHealthChecks === true,
     ...(typeof state.ruleProviderBaseUrl === "string" ? { ruleProviderBaseUrl: state.ruleProviderBaseUrl } : {}),
     ...(typeof state.proxyGroupAdvancedModeEnabled === "boolean"
       ? { proxyGroupAdvancedModeEnabled: state.proxyGroupAdvancedModeEnabled }
@@ -76,6 +110,7 @@ export function partializeConfigState(state: ConfigState): Partial<ConfigState> 
     allowLan: state.allowLan,
     testUrl: state.testUrl,
     testInterval: state.testInterval,
+    sharedHealthChecks: state.sharedHealthChecks,
     ruleProviderBaseUrl: state.ruleProviderBaseUrl,
     proxyGroupAdvancedModeEnabled: state.proxyGroupAdvancedModeEnabled,
     nodeNameFilter: normalizeNodeNameFilterConfig(state.nodeNameFilter),
@@ -93,7 +128,7 @@ function readPersistedConfigState(storage: ConfigDraftStorage, storageName: stri
   const envelope = parsePersistedEnvelope(storage.getItem(storageName));
   if (!envelope) return null;
   return normalizePersistedConfigState(envelope.state, {
-    discardDraft: envelope.version !== CONFIG_DRAFT_STORAGE_VERSION,
+    discardDraft: !isCompatibleConfigDraftVersion(envelope.version),
   });
 }
 

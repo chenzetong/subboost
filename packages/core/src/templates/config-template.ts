@@ -1,11 +1,14 @@
 import { PROXY_GROUP_MODULES } from "@subboost/core/generator/proxy-groups";
 import { normalizePersistedRuleOrder } from "@subboost/core/generator/rules";
 import { ensureCustomRuleId, isCustomRuleType } from "@subboost/core/rules/custom-rule-utils";
+import { normalizeCustomRuleValue } from "@subboost/core/rules/custom-rule-value";
+import { supportsNoResolve } from "@subboost/core/rules/custom-rule-types";
 import { resolveProxyGroupAdvancedModeEnabled } from "@subboost/core/proxy-group-advanced-mode";
 import { normalizeProxyGroupAdvancedConfig } from "@subboost/core/proxy-group-advanced";
 import { normalizeProxyGroupTargetRef } from "@subboost/core/proxy-group-targets";
 import {
   isValidRuleSetPathOrUrl,
+  isValidRuleSetFormatBehavior,
   normalizeRuleModelFromConfig,
   normalizeRuleSetPathInput,
 } from "@subboost/core/rules/rule-model";
@@ -94,6 +97,8 @@ export function validateSubBoostTemplateConfig(value: unknown): ValidationResult
   if (!testUrl.ok) return testUrl;
   const testInterval = parsePositiveInteger(value.testInterval, "testInterval");
   if (!testInterval.ok) return testInterval;
+  const sharedHealthChecks = parseOptionalBoolean(value.sharedHealthChecks, "sharedHealthChecks");
+  if (!sharedHealthChecks.ok) return sharedHealthChecks;
   const ruleProviderBaseUrl = parseHttpUrlString(value.ruleProviderBaseUrl, "ruleProviderBaseUrl");
   if (!ruleProviderBaseUrl.ok) return ruleProviderBaseUrl;
   const cnIpNoResolve = parseOptionalBoolean(value.cnIpNoResolve, "cnIpNoResolve");
@@ -107,6 +112,7 @@ export function validateSubBoostTemplateConfig(value: unknown): ValidationResult
   const normalizedRuleOrder = normalizePersistedRuleOrder({
     enabledModules: enabledProxyGroups.value.filter((id) => !hiddenSet.has(id)),
     customRules: customRules.value,
+    customProxyGroups: customProxyGroups.value,
     customRuleSets: ruleModel.customRuleSets,
     builtinRuleEdits: ruleModel.builtinRuleEdits,
     proxyGroupNameOverrides: proxyGroupNameOverrides.value,
@@ -144,6 +150,7 @@ export function validateSubBoostTemplateConfig(value: unknown): ValidationResult
       allowLan: allowLan.value,
       testUrl: testUrl.value,
       testInterval: testInterval.value,
+      sharedHealthChecks: sharedHealthChecks.value ?? false,
       ruleProviderBaseUrl: ruleProviderBaseUrl.value,
     },
   };
@@ -299,8 +306,10 @@ function parseCustomRules(value: unknown): { ok: true; value: CustomRule[] } | {
     const item = value[index];
     if (!isRecord(item)) return invalid("customRules 只能包含对象");
     if (typeof item.type !== "string" || !isCustomRuleType(item.type)) return invalid("customRules 包含无效类型");
-    const ruleValue = parseRequiredString(item.value, "customRules.value");
-    if (!ruleValue.ok) return ruleValue;
+    const rawRuleValue = parseRequiredString(item.value, "customRules.value");
+    if (!rawRuleValue.ok) return rawRuleValue;
+    const ruleValue = normalizeCustomRuleValue(item.type, rawRuleValue.value);
+    if (!ruleValue.ok) return invalid(`customRules.value 无效：${ruleValue.error}`);
     const target = parseRuleTarget(item.target, "customRules.target");
     if (!target.ok) return target;
     const noResolve = parseOptionalBoolean(item.noResolve, "customRules.noResolve");
@@ -312,7 +321,7 @@ function parseCustomRules(value: unknown): { ok: true; value: CustomRule[] } | {
           type: item.type,
           value: ruleValue.value,
           target: target.value,
-          ...(noResolve.value !== undefined ? { noResolve: noResolve.value } : {}),
+          ...(noResolve.value !== undefined ? { noResolve: noResolve.value && supportsNoResolve(item.type) } : {}),
         },
         index
       )
@@ -388,7 +397,7 @@ function parseCustomRuleSets(value: unknown): { ok: true; value: true } | { ok: 
     if (!id.ok) return id;
     const name = parseRequiredString(item.name, "customRuleSets.name");
     if (!name.ok) return name;
-    if (item.behavior !== "domain" && item.behavior !== "ipcidr") return invalid("customRuleSets.behavior 无效");
+    if (!isValidRuleSetFormatBehavior(item.format, item.behavior)) return invalid("customRuleSets.format 或 behavior 无效");
     const path = parseRequiredString(item.path, "customRuleSets.path");
     if (!path.ok) return path;
     const normalizedPath = normalizeRuleSetPathInput(path.value);
@@ -436,6 +445,8 @@ function parseDialerProxyGroups(value: unknown): { ok: true; value: DialerProxyG
     if (!relayNodes.ok) return relayNodes;
     const targetNodes = parseStringArray(item.targetNodes, "dialerProxyGroups.targetNodes");
     if (!targetNodes.ok) return targetNodes;
+    const groupTestUrl = item.testUrl === undefined ? undefined : parseHttpUrlString(item.testUrl, "dialerProxyGroups.testUrl");
+    if (groupTestUrl && !groupTestUrl.ok) return groupTestUrl;
     const enabled = parseOptionalBoolean(item.enabled, "dialerProxyGroups.enabled");
     if (!enabled.ok) return enabled;
     out.push({
@@ -447,6 +458,7 @@ function parseDialerProxyGroups(value: unknown): { ok: true; value: DialerProxyG
         : {}),
       relayNodes: relayNodes.value,
       targetNodes: targetNodes.value,
+      ...(groupTestUrl?.ok ? { testUrl: groupTestUrl.value } : {}),
       ...(enabled.value !== undefined ? { enabled: enabled.value } : {}),
     });
   }

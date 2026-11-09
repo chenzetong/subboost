@@ -216,4 +216,25 @@ describe("custom config-store actions", () => {
     );
     expect(getState().customRules[0].target).toBe("Stable Group");
   });
+
+  it("normalizes rule order with the updated custom proxy group state", () => {
+    const { actions, getState } = createHarness({
+      customProxyGroups: [
+        { id: "custom-1", name: "Custom", emoji: "", groupType: "select" },
+      ],
+      customRules: [
+        rule({
+          id: "disabled-target",
+          value: "disabled.example.com",
+          target: { kind: "custom", id: "custom-1" },
+        }),
+        rule({ id: "active-target", value: "active.example.com", target: "DIRECT" }),
+      ],
+      ruleOrder: ["custom-rule:disabled-target", "custom-rule:active-target"],
+    });
+
+    actions.updateCustomProxyGroup("custom-1", { enabled: false });
+
+    expect(getState().ruleOrder).toEqual(["custom-rule:active-target"]);
+  });
 });

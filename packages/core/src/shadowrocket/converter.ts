@@ -1,4 +1,4 @@
-import yaml from "js-yaml";
+import { loadMihomoYaml } from "@subboost/core/config/yaml-schema";
 import { convertProxy } from "./node-converter";
 import { describeProviderFailure, resolveProvider } from "./provider-map";
 import {
@@ -166,7 +166,7 @@ export function parseClashYaml(source: string): ClashConfig {
   if (!source.trim()) throw new ConversionError("EMPTY_INPUT", "请选择或粘贴 Clash / Mihomo YAML。");
   let parsed: unknown;
   try {
-    parsed = yaml.load(source, { json: true });
+    parsed = loadMihomoYaml(source);
   } catch (error) {
     throw new ConversionError("INVALID_YAML", `YAML 解析失败：${error instanceof Error ? error.message : String(error)}`);
   }

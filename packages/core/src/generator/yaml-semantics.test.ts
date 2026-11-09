@@ -1,5 +1,7 @@
-import yaml from "js-yaml";
+import * as yamlSchema from "../config/yaml-schema";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../config/yaml-schema", { spy: true });
 
 import {
   diffGeneratedYamlSemantics,
@@ -9,6 +11,11 @@ import {
 } from "./yaml-semantics";
 
 describe("generated YAML semantics", () => {
+  it("resolves merged configuration values", () => {
+    const snapshot = parseGeneratedYamlSemantics("<<: &defaults {dns: {enable: false}}\nmode: rule");
+    expect(snapshot.sections).toEqual({ dns: { enable: false }, mode: "rule" });
+  });
+
   it("treats YAML formatting and mapping order changes as format-only", () => {
     const before = parseGeneratedYamlSemantics(`
 mixed-port: 7897
@@ -172,7 +179,7 @@ limits:
     };
     expect(hashGeneratedYamlSemantics(snapshot)).toMatch(/^[a-f0-9]{8}$/);
 
-    const load = vi.spyOn(yaml, "load");
+    const load = vi.spyOn(yamlSchema, "loadMihomoYaml");
     try {
       load.mockImplementationOnce(() => []);
       expect(() => parseGeneratedYamlSemantics("[]")).toThrow("top-level object");

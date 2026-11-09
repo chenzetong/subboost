@@ -608,6 +608,7 @@ main() {
   [ -s "$candidate_manager" ] && bash -n "$candidate_manager" || die "Candidate manager is invalid."
 
   set_env_value SUBBOOST_IMAGE "$image"
+  set_env_value SUBBOOST_CANDIDATE_IMAGE "$image"
   set_env_value SUBBOOST_RELEASE_URL "$SUBBOOST_UPDATE_RELEASE_URL"
   set_env_value SUBBOOST_COMPOSE_URL "$compose_url"
   set_env_value SUBBOOST_MANAGER_URL "$manager_url"

@@ -209,6 +209,10 @@ describe("subscription CRUD shared helpers", () => {
       autoUpdateState: {
         externalFailureCount: 2,
         lastFailedAt: new Date("2026-06-01T04:00:00.000Z"),
+        nodeQuotaFailureCount: 2,
+        lastNodeQuotaExceededAt: new Date("2026-06-01T05:00:00.000Z"),
+        lastNodeQuotaActual: 120,
+        lastNodeQuotaLimit: 100,
       },
     };
     const secrets = {
@@ -235,6 +239,10 @@ describe("subscription CRUD shared helpers", () => {
       autoUpdateState: {
         externalFailureCount: 2,
         lastFailedAt: "2026-06-01T04:00:00.000Z",
+        nodeQuotaFailureCount: 2,
+        lastNodeQuotaExceededAt: "2026-06-01T05:00:00.000Z",
+        lastNodeQuotaActual: 120,
+        lastNodeQuotaLimit: 100,
         disabledAt: null,
       },
       yamlUrl: "https://subboost.example/s/token-1.yaml",

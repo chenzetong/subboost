@@ -74,7 +74,16 @@ vi.mock("./proxy-group-type-menu", () => ({
   },
 }));
 
+vi.mock("@subboost/ui/store/config-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@subboost/ui/store/config-store")>();
+  return { ...actual, useConfigStore: Object.assign(
+    (selector: (state: ReturnType<typeof actual.useConfigStore.getState>) => unknown) => selector(actual.useConfigStore.getState()),
+    actual.useConfigStore
+  ) };
+});
+
 import { GroupAdvancedSettingsDialog } from "./group-advanced-settings-dialog";
+import { useConfigStore } from "@subboost/ui/store/config-store";
 
 const TARGET = { kind: "module" as const, id: "auto" };
 const CONFLICT_STATE = {
@@ -84,7 +93,7 @@ const CONFLICT_STATE = {
   groupListeners: [{ id: "gl-other", target: { kind: "custom" as const, id: "c1" }, port: 9300 }],
 };
 
-// state 索引：0=draftType 1=draftStrategy 2=listenerOn 3=portInput 4=allowLan
+// state 索引：0=draftType 1=draftStrategy 2=listenerOn 3=portInput 4=allowLan 5=draftTestUrl
 function renderDialog(overrides: Record<number, unknown> = {}, props: Record<string, unknown> = {}) {
   stateMock.enabled = true;
   stateMock.callIndex = 0;
@@ -118,6 +127,35 @@ function renderDialog(overrides: Record<number, unknown> = {}, props: Record<str
 }
 
 describe("GroupAdvancedSettingsDialog", () => {
+  it("shares one saved switch value across automatic groups and cancels drafts", () => {
+    useConfigStore.setState({ sharedHealthChecks: false });
+    renderDialog({ 0: "url-test", 6: true });
+    const toggle = mocks.captures.switchFields.find((field) => field.label === "共享健康检查");
+    expect(toggle.checked).toBe(true);
+    expect(toggle.description).toBeUndefined();
+    mocks.captures.buttons.find((button) => button.children === "取消").onClick();
+    expect(useConfigStore.getState().sharedHealthChecks).toBe(false);
+    mocks.captures.buttons.find((button) => button.children === "保存").onClick();
+    expect(useConfigStore.getState().sharedHealthChecks).toBe(true);
+    renderDialog({ 0: "url-test" }, { groupName: "另一组" });
+    expect(mocks.captures.switchFields.find((field) => field.label === "共享健康检查").checked).toBe(true);
+    renderDialog({ 0: "select" });
+    expect(mocks.captures.switchFields.some((field) => field.label === "共享健康检查")).toBe(false);
+    useConfigStore.setState({ sharedHealthChecks: false });
+  });
+  it("saves the group's test URL and rejects invalid input", () => {
+    const onSave = vi.fn();
+    renderDialog({ 0: "url-test", 5: " https://local.subboost.test/204 " }, { onSave });
+    expect(mocks.captures.formFields.some((field) => field.label === "测速地址")).toBe(true);
+    mocks.captures.buttons.find((button) => button.children === "保存").onClick();
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ testUrl: "https://local.subboost.test/204" }));
+    renderDialog({ 0: "url-test", 5: "ftp://local.subboost.test/204" });
+    expect(mocks.captures.buttons.find((button) => button.children === "保存").disabled).toBe(true);
+    renderDialog({ 0: "select" }, { testUrl: "https://local.subboost.test/204", onSave });
+    expect(mocks.captures.formFields.some((field) => field.label === "测速地址")).toBe(false);
+    mocks.captures.buttons.find((button) => button.children === "保存").onClick();
+    expect(onSave).toHaveBeenLastCalledWith(expect.objectContaining({ testUrl: "https://local.subboost.test/204" }));
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });

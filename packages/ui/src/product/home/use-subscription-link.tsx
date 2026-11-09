@@ -36,6 +36,7 @@ import {
   type ProductInteractionResult,
   type ProductMode,
 } from "@subboost/ui/product/interactions";
+import { copyTextToClipboard } from "@subboost/ui/lib/clipboard";
 
 type EditingSubscription = {
   id: string;
@@ -88,6 +89,7 @@ type Options = {
   ruleProviderBaseUrl: string;
   testUrl: string;
   testInterval: number;
+  sharedHealthChecks: boolean;
   cnIpNoResolve: boolean;
   experimentalCnUseCnRuleSet: boolean;
 };
@@ -122,6 +124,7 @@ export function useSubscriptionLink({
   ruleProviderBaseUrl,
   testUrl,
   testInterval,
+  sharedHealthChecks,
   cnIpNoResolve,
   experimentalCnUseCnRuleSet,
 }: Options) {
@@ -295,6 +298,8 @@ export function useSubscriptionLink({
     }
 
     setIsCreatingSubscription(true);
+    const draftRevision = useConfigStore.getState().draftRevision;
+    const isCurrentDraft = () => useConfigStore.getState().draftRevision === draftRevision;
 
     try {
       const nodeNameFilter: NodeNameFilterConfig = useConfigStore.getState().nodeNameFilter;
@@ -396,6 +401,7 @@ export function useSubscriptionLink({
             ruleProviderBaseUrl,
             testUrl,
             testInterval,
+            sharedHealthChecks,
             cnIpNoResolve,
             experimentalCnUseCnRuleSet,
             autoSelectStrategy: "url-test",
@@ -410,6 +416,7 @@ export function useSubscriptionLink({
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = await response.json().catch(() => ({} as any));
+      if (!isCurrentDraft()) return;
 
       if (response.status === 401) {
         clearUser();
@@ -450,6 +457,7 @@ export function useSubscriptionLink({
         toast({ title: data.error || "创建失败", variant: "destructive" });
       }
     } catch (error) {
+      if (!isCurrentDraft()) return;
       console.error("Create subscription error:", error);
       trackSubscriptionMutation("runtimeError");
       toast({ title: "创建订阅失败，请稍后重试", variant: "destructive" });
@@ -491,6 +499,7 @@ export function useSubscriptionLink({
     subscriptionAdapter,
     template,
     testInterval,
+    sharedHealthChecks,
     testUrl,
     trackSubscriptionMutation,
   ]);
@@ -499,17 +508,18 @@ export function useSubscriptionLink({
   const handleCopyUrl = React.useCallback(async () => {
     if (!subscriptionUrl) return;
 
-    try {
-      await navigator.clipboard.writeText(subscriptionUrl);
-      setCopied(true);
-      interactions.subscriptionLinkCopied?.({
-        mode: subscriptionFlowMode,
-        flow: isEditingExistingSubscription ? "update" : "create",
-      });
-      setTimeout(() => setCopied(false), 2000);
-    } catch (error) {
-      console.error("Copy error:", error);
+    const copied = await copyTextToClipboard(subscriptionUrl);
+    if (!copied) {
+      toast({ title: "复制失败，请手动复制订阅链接", variant: "destructive" });
+      return;
     }
+
+    setCopied(true);
+    interactions.subscriptionLinkCopied?.({
+      mode: subscriptionFlowMode,
+      flow: isEditingExistingSubscription ? "update" : "create",
+    });
+    setTimeout(() => setCopied(false), 2000);
   }, [interactions, isEditingExistingSubscription, subscriptionFlowMode, subscriptionUrl]);
 
   return {

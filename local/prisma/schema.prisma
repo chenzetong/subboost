@@ -65,6 +65,10 @@ model SubscriptionAutoUpdateState {
   failureSourceState       String?   @db.Text
   lastFailedAt             DateTime?
   lastAttemptedAt          DateTime?
+  nodeQuotaFailureCount    Int       @default(0)
+  lastNodeQuotaExceededAt  DateTime?
+  lastNodeQuotaActual      Int?
+  lastNodeQuotaLimit       Int?
   disabledAt               DateTime?
   disabledReason           String?
   disabledPreviousInterval Int?
@@ -79,6 +83,14 @@ model JobLeaseLock {
   ownerToken String
   expiresAt  DateTime
   updatedAt  DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model RevokedSession {
+  revocationKey String   @id
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
 
   @@index([expiresAt])
 }

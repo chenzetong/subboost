@@ -322,9 +322,18 @@ ENV
       set -Eeuo pipefail
       home="$(mktemp -d)"
       trap 'rm -rf "$home"' EXIT
-      mkdir -p "$home/bin"
-      cat > "$home/.env" <<'ENV'
-SUBBOOST_IMAGE=image
+      release_dir="$home/release"
+      mkdir -p "$release_dir" "$home/bin"
+      cat > "$release_dir/release.json" <<'JSON'
+{"image":"new-image","composeUrl":"docker-compose.image.yml","managerUrl":"subboost-manager"}
+JSON
+      printf 'services:\n  app:\n    image: \${SUBBOOST_IMAGE}\n' > "$release_dir/docker-compose.image.yml"
+      printf '#!/usr/bin/env bash\necho new-manager\n' > "$release_dir/subboost-manager"
+      printf '#!/usr/bin/env bash\necho old-manager\n' > "$home/bin/subboost"
+      cat > "$home/.env" <<ENV
+SUBBOOST_RELEASE_URL=file://$release_dir/release.json
+SUBBOOST_IMAGE=old-image
+SUBBOOST_CANDIDATE_IMAGE=old-candidate-image
 POSTGRES_DB=subboost
 POSTGRES_USER=subboost
 POSTGRES_PASSWORD=password
@@ -348,6 +357,7 @@ ENV
         if [ "$1" = "info" ]; then return 0; fi
         if [ "$1" = "compose" ]; then
           printf '%s\\n' "$*" >> "$docker_calls_file"
+          printf 'image=%s candidate_image=%s command=%s\\n' "\${SUBBOOST_IMAGE:-}" "\${SUBBOOST_CANDIDATE_IMAGE:-}" "$*" >> "$docker_calls_file"
           case "$*" in
             "compose version"*) return 0 ;;
             *" config --services") printf 'app\\ndb\\ncron\\n'; return 0 ;;
@@ -371,7 +381,7 @@ ENV
       else
         update_status=$?
       fi
-      printf 'update_status=%s\\n' "$update_status"
+      printf 'update_status=%s parent_image=%s parent_candidate_image=%s\\n' "$update_status" "$SUBBOOST_IMAGE" "$SUBBOOST_CANDIDATE_IMAGE"
       cat "$docker_calls_file"
       [ "$update_status" -eq 1 ]
     `;
@@ -381,8 +391,14 @@ ENV
     expect(result.status, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("Candidate update failed: candidate cron startup failed");
     expect(result.stdout).toContain("Previous version restored successfully.");
-    expect(result.stdout).toMatch(/candidate-compose\.yml.*up -d --no-deps cron/);
-    expect(result.stdout).toMatch(/old-compose\.yml.*up -d --no-deps cron/);
+    expect(result.stdout).toContain(
+      "update_status=1 parent_image=old-image parent_candidate_image=old-candidate-image",
+    );
+    expect(result.stdout).toMatch(/image=new-image candidate_image=new-image command=compose.*candidate-compose\.yml up -d --no-deps cron$/m);
+    expect(result.stdout).toMatch(/image=new-image candidate_image=new-image command=compose.*candidate-compose\.yml stop cron app$/m);
+    expect(result.stdout).toMatch(/image=old-image candidate_image=old-candidate-image command=compose.*old-compose\.yml up -d db$/m);
+    expect(result.stdout).toMatch(/image=old-image candidate_image=old-candidate-image command=compose.*old-compose\.yml up -d app$/m);
+    expect(result.stdout).toMatch(/image=old-image candidate_image=old-candidate-image command=compose.*old-compose\.yml up -d --no-deps cron$/m);
     expect(result.stdout).not.toMatch(/old-compose\.yml.*up -d cron(?:\s|$)/);
   }, 10_000);
 
@@ -401,6 +417,7 @@ JSON
       cat > "$home/.env" <<ENV
 SUBBOOST_RELEASE_URL=file://$release_dir/release.json
 SUBBOOST_IMAGE=old-image
+SUBBOOST_CANDIDATE_IMAGE=old-candidate-image
 POSTGRES_DB=subboost
 POSTGRES_USER=subboost
 POSTGRES_PASSWORD=password
@@ -427,6 +444,11 @@ ENV
         printf 'command=%s\n' "$*" >> "$docker_log"
         if [ "$1" = "info" ]; then return 0; fi
         if [ "$1" = "compose" ]; then
+          case "$*" in
+            *"candidate-compose.yml"*)
+              printf 'candidate_image=%s candidate_release_image=%s command=%s\n' "\${SUBBOOST_IMAGE:-}" "\${SUBBOOST_CANDIDATE_IMAGE:-}" "$*" >> "$docker_log"
+              ;;
+          esac
           case "$*" in
             "compose version"*) return 0 ;;
             *" config --services") printf 'app\\ndb\\ncron\\n'; return 0 ;;
@@ -463,7 +485,16 @@ ENV
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("pull_image=new-image");
+    expect(result.stdout).not.toContain("candidate_image=old-image");
+    expect(result.stdout).not.toContain("candidate_release_image=old-candidate-image");
+    expect(result.stdout).toMatch(/candidate_image=new-image candidate_release_image=new-image command=compose.*candidate-compose\.yml config$/m);
+    expect(result.stdout).toMatch(/candidate_image=new-image candidate_release_image=new-image command=compose.*candidate-compose\.yml config --services$/m);
+    expect(result.stdout).toMatch(/candidate_image=new-image candidate_release_image=new-image command=compose.*candidate-compose\.yml pull$/m);
+    expect(result.stdout).toMatch(/candidate_image=new-image candidate_release_image=new-image command=compose.*candidate-compose\.yml up -d db$/m);
+    expect(result.stdout).toMatch(/candidate_image=new-image candidate_release_image=new-image command=compose.*candidate-compose\.yml up -d --no-deps app$/m);
+    expect(result.stdout).toMatch(/candidate_image=new-image candidate_release_image=new-image command=compose.*candidate-compose\.yml up -d --no-deps cron$/m);
     expect(result.stdout).toContain("SUBBOOST_IMAGE=new-image");
+    expect(result.stdout).toContain("SUBBOOST_CANDIDATE_IMAGE=new-image");
     expect(result.stdout).toContain("SUBBOOST_COMPOSE_URL=file://");
     expect(result.stdout).toContain("SUBBOOST_MANAGER_URL=file://");
     const pullIndex = result.stdout.search(/^command=compose.* pull$/m);

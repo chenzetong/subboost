@@ -1,4 +1,4 @@
-FROM node:22-alpine AS deps
+FROM node:24.22.1-alpine AS deps
 WORKDIR /package
 RUN apk add --no-cache openssl
 
@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
       attempt=$((attempt + 1)); \
     done
 
-FROM node:22-alpine AS builder
+FROM node:24.22.1-alpine AS builder
 WORKDIR /package
 RUN apk add --no-cache openssl
 
@@ -50,7 +50,7 @@ RUN npm run build
 FROM deps AS production-deps
 RUN npm prune --omit=dev
 
-FROM node:22-alpine AS runner
+FROM node:24.22.1-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ARG APP_RELEASE_VERSION=

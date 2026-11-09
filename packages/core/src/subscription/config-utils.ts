@@ -16,10 +16,12 @@ import {
 import { stripImportedNodeControlFieldsFromList } from "@subboost/core/subscription/imported-node-controls";
 import { buildProxyProvidersFromConfig } from "@subboost/core/subscription/proxy-providers";
 import { resolveNodeNameFilter } from "@subboost/core/subscription/node-name-filter";
-import { ensureCustomRuleId } from "@subboost/core/rules/custom-rule-utils";
+import { ensureCustomRuleId, isCustomRuleType } from "@subboost/core/rules/custom-rule-utils";
+import { normalizeCustomRuleValue } from "@subboost/core/rules/custom-rule-value";
+import { supportsNoResolve } from "@subboost/core/rules/custom-rule-types";
 import { DEFAULT_SUBBOOST_CONFIG } from "@subboost/core/config/defaults";
 import { normalizeRuleModelFromConfig } from "@subboost/core/rules/rule-model";
-import { normalizeProxyGroupAdvancedConfig } from "@subboost/core/proxy-group-advanced";
+import { normalizeGroupTestUrl, normalizeProxyGroupAdvancedConfig } from "@subboost/core/proxy-group-advanced";
 import { normalizeProxyGroupTargetRef } from "@subboost/core/proxy-group-targets";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -68,37 +70,24 @@ function normalizePort(value: unknown): number | undefined {
 function normalizeCustomRules(value: unknown): CustomRule[] | undefined {
   if (!Array.isArray(value)) return undefined;
 
-  const allowedTypes = new Set<CustomRule["type"]>([
-    "DOMAIN",
-    "DOMAIN-SUFFIX",
-    "DOMAIN-KEYWORD",
-    "IP-CIDR",
-    "IP-CIDR6",
-    "GEOIP",
-    "GEOSITE",
-    "PROCESS-NAME",
-    "DST-PORT",
-    "SRC-PORT",
-  ]);
-
   const out: CustomRule[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const item = value[index];
     if (!isRecord(item)) continue;
     const type = item.type;
-    if (typeof type !== "string" || !allowedTypes.has(type as CustomRule["type"])) continue;
+    if (typeof type !== "string" || !isCustomRuleType(type)) continue;
 
-    const ruleValue = toTrimmedString(item.value);
+    const ruleValue = normalizeCustomRuleValue(type, toTrimmedString(item.value) ?? "");
     const target = normalizeRuleTarget(item.target);
-    if (!ruleValue || !target) continue;
+    if (!ruleValue.ok || !target) continue;
 
     const noResolve = typeof item.noResolve === "boolean" ? item.noResolve : undefined;
     out.push(ensureCustomRuleId({
       id: toTrimmedString(item.id) || undefined,
-      type: type as CustomRule["type"],
-      value: ruleValue,
+      type,
+      value: ruleValue.value,
       target,
-      ...(noResolve !== undefined ? { noResolve } : {}),
+      ...(noResolve !== undefined ? { noResolve: noResolve && supportsNoResolve(type) } : {}),
     }, index));
   }
 
@@ -196,6 +185,7 @@ function normalizeDialerProxyGroups(value: unknown): DialerProxyGroup[] {
       ...(type === "load-balance" ? { strategy: strategy ?? DEFAULT_LOAD_BALANCE_STRATEGY } : {}),
       relayNodes,
       targetNodes,
+      ...(normalizeGroupTestUrl(item.testUrl) ? { testUrl: normalizeGroupTestUrl(item.testUrl) } : {}),
       ...(enabled !== undefined ? { enabled } : {}),
     });
   }
@@ -331,6 +321,7 @@ export function buildGenerateOptionsFromConfig(
     ...(autoSelectStrategy ? { autoSelectStrategy } : {}),
     testUrl,
     testInterval,
+    sharedHealthChecks: config.sharedHealthChecks === true,
     ...(cnIpNoResolve !== undefined ? { cnIpNoResolve } : {}),
     ...(experimentalCnUseCnRuleSet !== undefined ? { experimentalCnUseCnRuleSet } : {}),
     ...(normalizePort(config.mixedPort) !== undefined ? { mixedPort: normalizePort(config.mixedPort) as number } : {}),

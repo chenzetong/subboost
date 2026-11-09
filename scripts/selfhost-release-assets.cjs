@@ -224,6 +224,19 @@ function copyInstallScript(publicRoot, to, args) {
   fs.writeFileSync(to, rewriteInstallerDefaults(content, args), "utf8");
 }
 
+function writeReleaseCompose(publicRoot, to, image) {
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  const source = path.join(publicRoot, "local/docker-compose.image.yml");
+  const content = fs.readFileSync(source, "utf8").replace(/\r\n/g, "\n");
+  const marker = "image: ${SUBBOOST_IMAGE:?set SUBBOOST_IMAGE}";
+  const count = content.split(marker).length - 1;
+  if (count !== 1) {
+    throw new Error(`Expected exactly one SubBoost image marker in docker-compose.image.yml, found ${count}.`);
+  }
+  const resolvedImage = `image: ${"${SUBBOOST_CANDIDATE_IMAGE:-"}${image}}`;
+  fs.writeFileSync(to, content.replace(marker, resolvedImage), "utf8");
+}
+
 function createBundle(publicRoot, args) {
   const output = path.resolve(publicRoot, args.output);
   const manifest = buildManifest(publicRoot, args);
@@ -231,7 +244,7 @@ function createBundle(publicRoot, args) {
 
   fs.rmSync(output, { force: true, recursive: true });
   fs.mkdirSync(output, { recursive: true });
-  copyFile(publicRoot, "local/docker-compose.image.yml", path.join(output, "docker-compose.image.yml"));
+  writeReleaseCompose(publicRoot, path.join(output, "docker-compose.image.yml"), manifest.image);
   copyInstallScript(publicRoot, path.join(output, "install.sh"), args);
   copyFile(publicRoot, "local/scripts/subboost.sh", path.join(output, MANAGER_ASSET_NAME), { normalizeLineEndings: true });
   fs.chmodSync(path.join(output, "install.sh"), 0o755);
@@ -272,4 +285,5 @@ module.exports = {
   parseArgs,
   rewriteInstallerDefaults,
   usage,
+  writeReleaseCompose,
 };

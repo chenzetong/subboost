@@ -1,4 +1,5 @@
 "use client";
+import { SubscriptionQrButton } from "@subboost/ui/product/subscription/subscription-qr-code";
 
 import * as React from "react";
 import Link from "next/link";
@@ -10,7 +11,7 @@ import {
   Download,
   ExternalLink,
   FileCode,
-  MoreVertical,
+  Pencil,
   Plus,
   RefreshCw,
   Settings,
@@ -33,8 +34,15 @@ import {
 import { DashboardStatsCards } from "@subboost/ui/dashboard/dashboard-stats-cards";
 import { formatDashboardDate, formatIntervalLabel } from "@subboost/ui/dashboard/dashboard-format";
 import { buildRefreshSubscriptionSuccessToast } from "@subboost/ui/dashboard/dashboard-refresh-toast";
+import { copyTextToClipboard } from "@subboost/ui/lib/clipboard";
+import {
+  buildAutoUpdateDisabledNotice,
+  buildNodeQuotaWarning,
+  createResetDashboardAutoUpdateState,
+  isNodeQuotaAutoUpdateDisabled,
+} from "@subboost/ui/dashboard/dashboard-auto-update-warning";
 import { SubscriptionSettingsDialog } from "@subboost/ui/dashboard/subscription-settings-dialog";
-import type { RefreshSubscriptionResponse, Subscription } from "@subboost/ui/dashboard/dashboard-types";
+import type { RefreshSubscriptionResponse, Subscription, SubscriptionLink } from "@subboost/ui/dashboard/dashboard-types";
 
 type UpdateSettingsPayload = {
   name: string;
@@ -55,6 +63,7 @@ export type DashboardSurfaceAdapter = {
   deleteSubscription: (id: string) => Promise<void>;
   refreshSubscription: (id: string) => Promise<RefreshSubscriptionResponse>;
   updateSubscriptionSettings: (id: string, payload: UpdateSettingsPayload) => Promise<void>;
+  resetSubscriptionLink?: (id: string, token: string) => Promise<SubscriptionLink>;
   resolveDownloadUrl?: (subscription: Subscription) => string;
   renderAnnouncement?: (context: { user: User }) => React.ReactNode;
   renderHeaderActions?: (context: { user: User }) => React.ReactNode;
@@ -97,31 +106,6 @@ function triggerBrowserDownload(href: string, filename: string) {
   anchor.remove();
 }
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {}
-
-  try {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    textarea.style.top = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const ok = document.execCommand("copy");
-    textarea.remove();
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
 export function SubscriptionDashboardSurface({ adapter }: Props) {
   const { user, isLoading: userLoading, fetchUser } = useUserStore();
   const [subscriptions, setSubscriptions] = React.useState<Subscription[]>([]);
@@ -141,6 +125,8 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
   );
   const [autoUpdateHours, setAutoUpdateHours] = React.useState<number>(autoUpdatePolicy.defaultHours);
   const [savingSettings, setSavingSettings] = React.useState(false);
+  const [resettingLink, setResettingLink] = React.useState(false);
+  const resetLinkPending = React.useRef(false);
 
   React.useEffect(() => {
     void fetchUser();
@@ -180,23 +166,18 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
       } catch {}
       return true;
     });
-    const firstDisabled = unseen[0];
-    if (!firstDisabled) return;
+    if (unseen.length === 0) return;
 
     const eventKey = unseen.map((sub) => `${sub.id}:${sub.autoUpdateState.disabledAt}`).join("|");
     if (autoUpdateNoticeRef.current === eventKey) return;
     autoUpdateNoticeRef.current = eventKey;
+    const notice = buildAutoUpdateDisabledNotice(unseen);
 
     toast({
-      title: unseen.length === 1 ? "自动更新已关闭" : `${unseen.length} 个订阅的自动更新已关闭`,
+      title: notice.title,
       description: (
         <div className="whitespace-pre-line">
-          {[
-            unseen.length === 1
-              ? `「${firstDisabled.name}」的订阅源连续拉取失败，系统已关闭自动更新。`
-              : "部分订阅源连续拉取失败，系统已关闭对应订阅的自动更新。",
-            "当前可用配置仍会保留；请检查订阅 URL 是否失效、是否限制服务端/代理 IP，必要时重新复制订阅链接后再开启自动更新。",
-          ].join("\n")}
+          {notice.description}
         </div>
       ),
       variant: "warning",
@@ -204,7 +185,7 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
   }, [subscriptions, user]);
 
   const copyToClipboard = async (subscriptionUrl: string, id: string) => {
-    const copied = await copyText(subscriptionUrl);
+    const copied = await copyTextToClipboard(subscriptionUrl);
     if (!copied) {
       toast({ title: "复制失败，请手动复制订阅链接", variant: "destructive" });
       return;
@@ -275,7 +256,7 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
   };
 
   const saveSubscriptionSettings = async () => {
-    if (!settingsSub || savingSettings) return;
+    if (!settingsSub || savingSettings || resetLinkPending.current) return;
 
     const name = settingsName.trim();
     if (!name || name.length > 100) {
@@ -303,6 +284,7 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
     }
 
     const nextAutoUpdateInterval = autoUpdateEnabled ? autoUpdateIntervalHoursToSeconds(hoursValue) : null;
+    const shouldResetAutoUpdateState = settingsSub.autoUpdateInterval === null && nextAutoUpdateInterval !== null;
     setSavingSettings(true);
     try {
       await adapter.updateSubscriptionSettings(settingsSub.id, {
@@ -319,17 +301,9 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
                 name,
                 smartNodeMatchingEnabled,
                 autoUpdateInterval: nextAutoUpdateInterval,
-                ...(autoUpdateEnabled
+                ...(shouldResetAutoUpdateState
                   ? {
-                      autoUpdateState: {
-                        externalFailureCount: 0,
-                        failureSourceState: null,
-                        lastFailedAt: null,
-                        lastAttemptedAt: null,
-                        disabledAt: null,
-                        disabledReason: null,
-                        disabledPreviousInterval: null,
-                      },
+                      autoUpdateState: createResetDashboardAutoUpdateState(),
                     }
                   : {}),
               }
@@ -342,6 +316,31 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
       toast({ title: error instanceof Error ? error.message : "保存失败，请稍后重试", variant: "destructive" });
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const resetSubscriptionLink = async () => {
+    if (!settingsSub || !adapter.resetSubscriptionLink || savingSettings || resetLinkPending.current) return;
+    resetLinkPending.current = true;
+    setResettingLink(true);
+    try {
+      const confirmed = await confirmDialog({
+        title: "重置订阅链接？",
+        description: "旧链接会立即失效。重置后，请在代理软件中换成新链接。",
+        confirmText: "重置链接",
+        variant: "destructive",
+      });
+      if (!confirmed) return;
+      const link = await adapter.resetSubscriptionLink(settingsSub.id, settingsSub.token);
+      setSubscriptions((items) => items.map((item) => item.id === link.id ? { ...item, ...link } : item));
+      setSettingsSub((item) => item?.id === link.id ? { ...item, ...link } : item);
+      setCopiedId(null);
+      toast({ title: "订阅链接已重置", description: "请重新复制链接并更新代理软件中的订阅。" });
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : "重置失败，请稍后重试", variant: "destructive" });
+    } finally {
+      resetLinkPending.current = false;
+      setResettingLink(false);
     }
   };
 
@@ -358,7 +357,7 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold mb-1">我的订阅</h1>
-          <p className="text-white/50">管理您的订阅链接</p>
+          <p className="text-fg-50">管理您的订阅链接</p>
         </div>
         <div className="flex items-center gap-2">
           {adapter.renderHeaderActions?.({ user })}
@@ -383,14 +382,14 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
           {isLoading ? (
             <div className="space-y-4">
               {[1, 2].map((i) => (
-                <div key={i} className="h-24 bg-white/10 rounded-lg animate-pulse" />
+                <div key={i} className="h-24 bg-ink/10 rounded-lg animate-pulse" />
               ))}
             </div>
           ) : subscriptions.length === 0 ? (
             <div className="text-center py-12">
-              <FileCode className="h-12 w-12 mx-auto text-white/40 mb-4" />
+              <FileCode className="h-12 w-12 mx-auto text-fg-40 mb-4" />
               <h3 className="text-lg font-medium mb-2">暂无订阅</h3>
-              <p className="text-white/50 mb-4">创建您的第一个订阅配置</p>
+              <p className="text-fg-50 mb-4">创建您的第一个订阅配置</p>
               <Button asChild>
                 <Link href={newSubscriptionHref}>
                   <Plus className="mr-2 h-4 w-4" />
@@ -433,6 +432,8 @@ export function SubscriptionDashboardSurface({ adapter }: Props) {
         setAutoUpdateHours={setAutoUpdateHours}
         savingSettings={savingSettings}
         onSave={saveSubscriptionSettings}
+        onResetLink={adapter.resetSubscriptionLink ? resetSubscriptionLink : undefined}
+        resettingLink={resettingLink}
         userIsAdmin={user?.isAdmin === true}
         autoUpdatePolicy={autoUpdatePolicy}
       />
@@ -468,10 +469,10 @@ function DashboardSkeleton() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="animate-pulse space-y-6">
-        <div className="h-8 w-48 bg-white/10 rounded" />
+        <div className="h-8 w-48 bg-ink/10 rounded" />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-32 bg-white/10 rounded-xl" />
+            <div key={i} className="h-32 bg-ink/10 rounded-xl" />
           ))}
         </div>
       </div>
@@ -483,9 +484,9 @@ function LoginPrompt({ loginHref }: { loginHref: string }) {
   return (
     <div className="container mx-auto px-4 py-16 text-center">
       <div className="max-w-md mx-auto space-y-4">
-        <Shield className="h-16 w-16 mx-auto text-white/50" />
+        <Shield className="h-16 w-16 mx-auto text-fg-50" />
         <h1 className="text-2xl font-bold">请先登录</h1>
-        <p className="text-white/50">登录后可以管理您的订阅和模板</p>
+        <p className="text-fg-50">登录后可以管理您的订阅和模板</p>
         <Button asChild size="lg">
           <Link href={loginHref}>登录</Link>
         </Button>
@@ -515,17 +516,19 @@ function SubscriptionRow({
   onRefresh: (id: string) => Promise<void>;
   onSettings: (sub: Subscription) => void;
 }) {
+  const quotaWarning = buildNodeQuotaWarning(sub.autoUpdateState);
+  const quotaDisabled = isNodeQuotaAutoUpdateDisabled(sub.autoUpdateState);
   return (
-    <div className="flex flex-col gap-3 p-4 rounded-lg bg-white/5 border border-white/10 hover:border-white/20 transition-colors sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+    <div className="flex flex-col gap-3 p-4 rounded-lg bg-ink/5 border border-ink/10 hover:border-ink/20 transition-colors sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="flex min-w-0 flex-1 items-start gap-4 sm:items-center">
-        <div className="p-2 rounded-lg bg-white/10">
+        <div className="p-2 rounded-lg bg-ink/10">
           <FileCode className="h-5 w-5 text-primary-500" />
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="min-w-0 flex-1 truncate font-medium">{sub.name}</h3>
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-white/50">
+          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-50">
             <span className="flex items-center gap-1">
               <Clock className="h-3.5 w-3.5" />
               创建于 {formatDashboardDate(sub.createdAt)}
@@ -540,7 +543,13 @@ function SubscriptionRow({
                 每 {formatIntervalLabel(sub.autoUpdateInterval)} 刷新缓存
               </span>
             )}
-            {!sub.autoUpdateInterval && sub.autoUpdateState.disabledAt && sub.autoUpdateState.disabledReason && (
+            {quotaWarning && (
+              <span className="flex items-center gap-1 text-amber-300">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                {quotaWarning}{quotaDisabled ? "，自动更新已关闭" : ""}
+              </span>
+            )}
+            {!quotaDisabled && !sub.autoUpdateInterval && sub.autoUpdateState.disabledAt && sub.autoUpdateState.disabledReason && (
               <span className="flex items-center gap-1 text-amber-300">
                 <AlertTriangle className="h-3.5 w-3.5" />
                 自动更新已关闭：{sub.autoUpdateState.disabledReason}
@@ -553,7 +562,7 @@ function SubscriptionRow({
       <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
         <Button asChild variant="ghost" size="sm" className="gap-0 sm:gap-2" title="回到首页编辑该订阅（更新后链接不变）">
           <Link href={editHref}>
-            <Settings className="h-4 w-4" />
+            <Pencil className="h-4 w-4" />
             <span className="hidden sm:inline">编辑</span>
           </Link>
         </Button>
@@ -564,7 +573,7 @@ function SubscriptionRow({
           className="gap-0 sm:gap-2"
           title="订阅设置（改名 / 自动更新）"
         >
-          <MoreVertical className="h-4 w-4" />
+          <Settings className="h-4 w-4" />
           <span className="hidden sm:inline">设置</span>
         </Button>
         <Button
@@ -597,6 +606,7 @@ function SubscriptionRow({
             </>
           )}
         </Button>
+        <SubscriptionQrButton url={sub.subscriptionUrl} />
         <Button
           variant="ghost"
           size="sm"
@@ -656,15 +666,15 @@ function QuickActionCard({
 }) {
   return (
     <Link href={href}>
-      <Card className="cursor-pointer hover:border-white/20 transition-colors">
+      <Card className="cursor-pointer hover:border-ink/20 transition-colors">
         <CardContent className="pt-6">
           <div className="flex items-center gap-4">
             <div className={`p-3 rounded-lg ${iconClassName}`}>{icon}</div>
             <div>
               <h3 className="font-medium">{title}</h3>
-              <p className="text-sm text-white/50">{description}</p>
+              <p className="text-sm text-fg-50">{description}</p>
             </div>
-            <ExternalLink className="ml-auto h-5 w-5 text-white/40" />
+            <ExternalLink className="ml-auto h-5 w-5 text-fg-40" />
           </div>
         </CardContent>
       </Card>

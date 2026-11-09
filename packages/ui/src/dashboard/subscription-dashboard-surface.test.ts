@@ -44,6 +44,8 @@ vi.mock("react", async (importOriginal) => {
 
 vi.mock("next/link", () => ({ default: (props: any) => props.children }));
 vi.mock("lucide-react", () => ({
+  QrCode: () => null,
+  X: () => null,
   AlertTriangle: () => null,
   Check: () => null,
   Clock: () => null,
@@ -51,7 +53,7 @@ vi.mock("lucide-react", () => ({
   Download: () => null,
   ExternalLink: () => null,
   FileCode: () => null,
-  MoreVertical: () => null,
+  Pencil: () => null,
   Plus: () => null,
   RefreshCw: () => null,
   Settings: () => null,
@@ -107,6 +109,7 @@ vi.mock("@subboost/ui/dashboard/subscription-settings-dialog", () => ({
 }));
 
 import { SubscriptionDashboardSurface, type DashboardSurfaceAdapter } from "./subscription-dashboard-surface";
+import { buildAutoUpdateDisabledNotice } from "./dashboard-auto-update-warning";
 
 const user = { id: "user-1", isAdmin: false, name: "Alice" };
 
@@ -126,6 +129,10 @@ const subscription = {
     failureSourceState: null,
     lastFailedAt: null,
     lastAttemptedAt: null,
+    nodeQuotaFailureCount: 0,
+    lastNodeQuotaExceededAt: null,
+    lastNodeQuotaActual: null,
+    lastNodeQuotaLimit: null,
     disabledAt: null,
     disabledReason: null,
     disabledPreviousInterval: null,
@@ -142,6 +149,32 @@ const disabledSubscription = {
     ...subscription.autoUpdateState,
     disabledAt: "2026-01-03T00:00:00.000Z",
     disabledReason: "fetch_failed",
+  },
+};
+
+const quotaWarningSubscription = {
+  ...subscription,
+  id: "sub-quota-warning",
+  autoUpdateState: {
+    ...subscription.autoUpdateState,
+    nodeQuotaFailureCount: 2,
+    lastNodeQuotaExceededAt: "2026-01-03T00:00:00.000Z",
+    lastNodeQuotaActual: 120,
+    lastNodeQuotaLimit: 100,
+  },
+};
+
+const quotaDisabledSubscription = {
+  ...quotaWarningSubscription,
+  id: "sub-quota-disabled",
+  name: "Quota Disabled",
+  autoUpdateInterval: null,
+  autoUpdateState: {
+    ...quotaWarningSubscription.autoUpdateState,
+    nodeQuotaFailureCount: 3,
+    disabledAt: "2026-01-04T00:00:00.000Z",
+    disabledReason: "节点数连续超过配额",
+    disabledPreviousInterval: 86400,
   },
 };
 
@@ -203,6 +236,7 @@ function stubDocumentActions() {
     style: {} as Record<string, string>,
     setAttribute: vi.fn(),
     select: vi.fn(),
+    setSelectionRange: vi.fn(),
     remove: vi.fn(),
   };
   const appendChild = vi.fn();
@@ -293,6 +327,39 @@ describe("SubscriptionDashboardSurface", () => {
       "2026-01-03T00:00:00.000Z:fetch_failed"
     );
     expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "自动更新已关闭", variant: "warning" }));
+
+    renderSurface(adapter, { 0: [quotaDisabledSubscription], 1: false }, { runEffects: true });
+    await flushPromises();
+    expect(mocks.toast).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title: "自动更新已关闭",
+        description: expect.anything(),
+        variant: "warning",
+      })
+    );
+    expect(renderToStaticMarkup(mocks.toast.mock.calls.at(-1)?.[0].description)).toContain(
+      "请减少导入节点或订阅源，或提高节点额度"
+    );
+  });
+
+  it("renders persistent node quota warnings before and after automatic disablement", () => {
+    const warningHtml = renderSurface(createAdapter(), { 0: [quotaWarningSubscription], 1: false }).html;
+    expect(warningHtml).toContain("节点数超出配额：实际 120，额度 100（连续 2/3 次）");
+    expect(warningHtml).not.toContain("自动更新已关闭：订阅源连续拉取失败");
+
+    const disabledHtml = renderSurface(createAdapter(), { 0: [quotaDisabledSubscription], 1: false }).html;
+    expect(disabledHtml).toContain("节点数超出配额：实际 120，额度 100（连续 3/3 次），自动更新已关闭");
+    expect(disabledHtml).not.toContain("自动更新已关闭：节点数连续超过配额");
+  });
+
+  it("keeps quota and source-failure recovery guidance separate in a mixed disabled notice", () => {
+    const notice = buildAutoUpdateDisabledNotice([disabledSubscription, quotaDisabledSubscription]);
+
+    expect(notice.title).toBe("2 个订阅的自动更新已关闭");
+    expect(notice.description).toContain("1 个订阅因节点数连续超过配额而关闭自动更新");
+    expect(notice.description).toContain("1 个订阅因订阅源连续拉取失败而关闭自动更新");
+    expect(notice.description).toContain("节点超额：节点数超出配额：实际 120，额度 100（连续 3/3 次）");
+    expect(notice.description).toContain("订阅源失败：当前可用配置仍会保留；请检查订阅 URL");
   });
 
   it("copies, deletes, refreshes, and opens settings for subscriptions", async () => {
@@ -343,6 +410,7 @@ describe("SubscriptionDashboardSurface", () => {
     expect(dom.createElement).toHaveBeenCalledWith("textarea");
     expect(dom.textarea.value).toBe("https://example.com/sub");
     expect(dom.textarea.select).toHaveBeenCalled();
+    expect(dom.textarea.setSelectionRange).toHaveBeenCalledWith(0, dom.textarea.value.length);
     expect(dom.execCommand).toHaveBeenCalledWith("copy");
     expect(dom.textarea.remove).toHaveBeenCalled();
     expect(setters[2]).toHaveBeenCalledWith("sub-1");
@@ -467,6 +535,36 @@ describe("SubscriptionDashboardSurface", () => {
     );
   });
 
+  it("confirms link rotation, guards duplicate clicks and preserves unsaved settings", async () => {
+    const currentSubscription = { ...subscription, shadowrocketUrl: "https://local.subboost.test/old.conf" };
+    const link = {
+      id: subscription.id, token: "rotated", subscriptionUrl: "https://local.subboost.test/new",
+      shadowrocketUrl: "https://local.subboost.test/new.conf",
+    };
+    const adapter = createAdapter({ resetSubscriptionLink: vi.fn(async () => link) });
+    renderSurface(adapter, { 0: [currentSubscription], 1: false, 4: true, 5: currentSubscription, 6: "Unsaved name" });
+    mocks.confirmDialog.mockResolvedValueOnce(false);
+    await mocks.captures.settingsDialog.onResetLink();
+    expect(adapter.resetSubscriptionLink).not.toHaveBeenCalled();
+    mocks.confirmDialog.mockResolvedValueOnce(true);
+    const first = mocks.captures.settingsDialog.onResetLink();
+    await mocks.captures.settingsDialog.onResetLink();
+    await first;
+    expect(adapter.resetSubscriptionLink).toHaveBeenCalledExactlyOnceWith(subscription.id, subscription.token);
+    expect((stateMock.setters[0] as any).lastValue[0]).toEqual({ ...subscription, ...link });
+    expect((stateMock.setters[5] as any).lastValue).toEqual({ ...subscription, ...link });
+    expect(stateMock.setters[6]).not.toHaveBeenCalled();
+  });
+
+  it("retains the current link when reset fails", async () => {
+    const adapter = createAdapter({ resetSubscriptionLink: vi.fn(async () => { throw new Error("reset failed"); }) });
+    renderSurface(adapter, { 0: [subscription], 1: false, 4: true, 5: subscription });
+    mocks.confirmDialog.mockResolvedValueOnce(true);
+    await mocks.captures.settingsDialog.onResetLink();
+    expect(stateMock.setters[0]).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" }));
+  });
+
   it("validates and saves subscription settings", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const adapter = createAdapter();
@@ -495,6 +593,36 @@ describe("SubscriptionDashboardSurface", () => {
     });
     expect(stateMock.setters[0]).toHaveBeenCalledWith(expect.any(Function));
     expect(stateMock.setters[4]).toHaveBeenCalledWith(false);
+
+    renderSurface(adapter, {
+      0: [quotaWarningSubscription],
+      1: false,
+      4: true,
+      5: quotaWarningSubscription,
+      6: "Quota warning",
+      7: true,
+      8: true,
+      9: 24,
+      10: false,
+    });
+    await mocks.captures.settingsDialog.onSave();
+    expect((stateMock.setters[0] as any).lastValue[0].autoUpdateState).toEqual(
+      quotaWarningSubscription.autoUpdateState
+    );
+
+    renderSurface(adapter, {
+      0: [disabledSubscription],
+      1: false,
+      4: true,
+      5: disabledSubscription,
+      6: "Re-enabled",
+      7: true,
+      8: true,
+      9: 24,
+      10: false,
+    });
+    await mocks.captures.settingsDialog.onSave();
+    expect((stateMock.setters[0] as any).lastValue[0].autoUpdateState).toEqual(subscription.autoUpdateState);
 
     renderSurface(adapter, { 0: [subscription], 1: false, 4: true, 5: subscription, 6: "Manual", 7: true, 8: false, 9: 24, 10: false });
     await mocks.captures.settingsDialog.onSave();

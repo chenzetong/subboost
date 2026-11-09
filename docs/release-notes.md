@@ -1,57 +1,21 @@
-# SubBoost v2.7.0
+# SubBoost v2.11.0
 
 ## 中文
 
-### 更新重点
+- 扩展自定义规则，支持更多 Mihomo 规则类型、AND/OR/NOT 逻辑组合及批量导入格式，改进规则参数和目标的保留。
+- 新增订阅链接重置，可在订阅设置中更换链接并使旧链接失效。
+- 改进规则格式识别、兼容健康检查的共享，以及移动端设置与弹窗布局。
+- 改进部分 VLESS Reality 链接的导入兼容性。
+- 修复大备份校验误报导致自部署升级中止的问题。
 
-SubBoost v2.7.0 新增代理组监听端口和自动节点处理，并加强自部署环境的订阅导入安全、首次初始化、定时任务、更新回滚与备份可靠性。本版本也改进了多处界面交互、可访问性和订阅配置兼容性。
-
-### 主要变化
-
-- 代理组现在可以绑定独立的 mixed 监听端口，让接入该端口的流量固定通过指定代理组。默认只允许本机访问；允许局域网访问时，请务必使用防火墙阻止公网连接。
-- 新增自动节点处理，可通过节点名称正则表达式排除不需要的节点。关闭后会恢复原有节点和相关配置，不会永久删除选择。
-- 自部署管理员可以显式允许受信任的本机或局域网订阅源；默认仍会阻止本机、私有和保留地址，并继续检查重定向、响应大小和危险 URL。
-- 加强首次管理员初始化、登录限流、请求大小限制和定时任务互斥，降低未授权初始化、暴力尝试和重复任务带来的风险。
-- v2.7.0 会安装新的事务式更新器；从后续更新开始，它会先准备并验证回滚备份，候选版本失败时恢复旧镜像、配置和数据库。数据库备份失败时也不会再留下看似成功的不完整备份。
-- 修复更新后启动定时任务可能重新创建应用容器、导致短暂连接重置的问题。
-- 改进表单、弹窗、开关、密码输入、图标按钮和窄屏布局，并修复来源编辑、高级模式和代理组交互中的多处不一致。
-- 加强订阅解析、规则配置、导入错误和旧配置读取兼容性，同时更新存在安全公告的运行时依赖。
-- amd64 与 arm64 镜像现在使用原生构建环境，减少 QEMU 构建导致的偶发非法指令和长时间卡住。
-
-### 升级说明
-
-- 升级前仍建议备份 `/opt/subboost/.env` 和数据库。
-- 数据库变更是增量 migration，正常升级不需要手工运行 SQL，migration 会在启动时自动执行。
-- 官方 v2.6.0 一键安装即使还没有 `LOCAL_SETUP_TOKEN`，也可以通过 v2.7.0 Compose 配置完成第一跳；首次管理员初始化在令牌缺失时仍会拒绝执行。
-- 从 v2.6.0 发起的这一跳仍由旧更新器执行，因此本次升级本身还没有新版的事务式回滚保护。升级前请务必单独备份 `/opt/subboost/.env` 和数据库；安装 v2.7.0 后的后续更新才使用新的保护流程。
-- 完全手工维护 Docker Compose 的用户：全新初始化前必须在 `.env` 中设置高熵的 `LOCAL_SETUP_TOKEN`。已经初始化的旧实例即使暂时缺少它也能启动和正常登录，但在补齐令牌前不能再次执行首次管理员初始化。
-- 自动节点处理、内网订阅源和代理组监听端口默认都不会自动开启，现有订阅、模板、规则和代理组配置不会被升级过程主动改写。
-- 代理组监听端口若允许局域网访问，将成为没有账号密码的局域网代理入口；请只在可信网络使用，并确认公网防火墙未开放对应端口。
+升级提示：如果旧版更新时出现 `read=141 pg_restore=0`，请先使用本次发布附带的独立修复脚本更新管理器，再运行 `subboost update`。修复脚本保留备份校验，不修改数据库和应用配置。
 
 ## English
 
-### Highlights
+- Expand custom rules with more Mihomo rule types, AND/OR/NOT logical combinations, and batch import formats, with improved preservation of rule parameters and targets.
+- Add subscription link reset in subscription settings, replacing the link and invalidating the previous one.
+- Improve rule format detection, sharing of compatible health checks, and mobile settings and dialog layouts.
+- Improve import compatibility for certain VLESS Reality links.
+- Fix false verification failures on large backups that could abort self-hosted updates.
 
-SubBoost v2.7.0 adds per-group listener ports and automatic node processing, while strengthening subscription-import security, first-time setup, scheduled jobs, update rollback, and backup reliability for self-hosted installations. It also improves interface consistency, accessibility, and subscription configuration compatibility.
-
-### Main Changes
-
-- Proxy groups can now bind a dedicated mixed listener port, routing traffic received on that port through the selected group. Listeners are local-only by default; if LAN access is enabled, use a firewall to prevent public Internet access.
-- Added automatic node processing with regular expressions that exclude unwanted node names. Disabling the feature restores the original nodes and related configuration instead of permanently deleting selections.
-- Self-hosted administrators can explicitly allow trusted local or LAN subscription sources. Local, private, and reserved addresses remain blocked by default, with redirect, response-size, and unsafe-URL checks still enforced.
-- Strengthened first-administrator setup, login throttling, request-size limits, and scheduled-job locking to reduce unauthorized setup, brute-force attempts, and overlapping jobs.
-- v2.7.0 installs a new transactional updater. Starting with subsequent updates, it prepares and verifies a rollback backup before activation, then restores the previous image, configuration, and database if the candidate fails. Failed database exports are no longer left behind as apparently successful backups.
-- Fixed a case where starting scheduled jobs after an update could recreate the application container and briefly reset connections.
-- Improved forms, dialogs, switches, password fields, icon buttons, and narrow-screen layouts, while fixing inconsistencies in source editing, advanced mode, and proxy-group interactions.
-- Improved subscription parsing, rule configuration, import errors, and compatibility with older saved configurations, and updated runtime dependencies affected by security advisories.
-- amd64 and arm64 images now use native build environments, reducing intermittent illegal-instruction failures and long stalls associated with QEMU builds.
-
-### Upgrade Notes
-
-- Back up `/opt/subboost/.env` and the database before upgrading.
-- Database changes use additive migrations. Normal upgrades do not require manually running SQL, and migrations run automatically during startup.
-- An official v2.6.0 one-click installation without `LOCAL_SETUP_TOKEN` can pass the v2.7.0 Compose configuration and complete the first hop. First-administrator setup still fails closed while the token is absent.
-- The v2.6.0-to-v2.7.0 hop still runs through the old updater, so that upgrade itself does not yet have the new transactional rollback protection. Back up `/opt/subboost/.env` and the database separately before upgrading. Subsequent updates after v2.7.0 is installed use the new protected flow.
-- For manually maintained Docker Compose deployments, set a high-entropy `LOCAL_SETUP_TOKEN` in `.env` before a fresh setup. An already-initialized legacy instance can still boot and use normal login without it, but first-administrator setup remains unavailable until the token is configured.
-- Automatic node processing, local-network subscription sources, and per-group listener ports remain disabled until explicitly enabled. Existing subscriptions, templates, rules, and proxy-group settings are not automatically rewritten during the upgrade.
-- Enabling LAN access for a proxy-group listener creates a LAN proxy port without a username or password. Use it only on a trusted network and make sure the corresponding port is not exposed through the public firewall.
+Upgrade note: If an older installation reports `read=141 pg_restore=0` during an update, first use this release's standalone repair script to refresh the manager, then run `subboost update`. The repair script preserves backup verification and does not modify the database or application configuration.

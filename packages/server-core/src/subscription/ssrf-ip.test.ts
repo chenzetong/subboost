@@ -87,6 +87,37 @@ describe("SSRF IP classification", () => {
     ]);
   });
 
+  it("recognizes only the IPv6 benchmarking prefix as fake-ip", () => {
+    for (const ip of ["2001:2::7", "2001:0002:0000:ffff:ffff:ffff:ffff:ffff"]) {
+      expect(isBenchmarkReservedIp(ip), ip).toBe(true);
+      expect(isPrivateOrReservedIp(ip), ip).toBe(true);
+    }
+    for (const ip of ["2001:2:1::1", "2001:3::1", "2001:db8::1", "fd00::1", "::ffff:198.18.0.1"]) {
+      expect(isBenchmarkReservedIp(ip), ip).toBe(false);
+    }
+  });
+
+  it.each([
+    ["198.18.0.7", "2001:2::7"],
+    ["2001:2::7"],
+    ["2001:2::7", "2606:4700:4700::1111"],
+  ])("rechecks IPv6 fake-ip answers: %j", (...addresses) => {
+    expect(shouldRecheckFakeIpDnsAnswers(addresses)).toBe(true);
+    expect(selectDnsAddressesAfterFakeIpRecheck(addresses, ["2606:4700:4700::1111"]))
+      .toEqual(["2606:4700:4700::1111"]);
+    expect(selectDnsAddressesAfterFakeIpRecheck(addresses, [])).toEqual(addresses);
+    expect(selectDnsAddressesAfterFakeIpRecheck(addresses, ["fd00::1"])).toEqual(["fd00::1"]);
+  });
+
+  it.each([
+    ["2001:2::7", "fd00::1"],
+    ["198.18.0.7", "2001:2::7", "10.0.0.1"],
+    ["2001:2:1::7"],
+  ])("keeps mixed private or non-benchmark answers blocked: %j", (...addresses) => {
+    expect(shouldRecheckFakeIpDnsAnswers(addresses)).toBe(false);
+    expect(selectDnsAddressesAfterFakeIpRecheck(addresses, ["2606:4700:4700::1111"])).toEqual(addresses);
+  });
+
   it("rechecks only fake-ip DNS answers and selects DoH results conservatively", () => {
     expect(shouldRecheckFakeIpDnsAnswers(["198.18.3.6"])).toBe(true);
     expect(shouldRecheckFakeIpDnsAnswers(["198.18.3.6", "198.19.1.1"])).toBe(true);

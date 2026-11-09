@@ -160,16 +160,79 @@ describe("RulesManagementSection", () => {
     );
   });
 
+  it("passes custom proxy groups to the rule builder and renders their full names", () => {
+    const customProxyGroups = [
+      {
+        id: "custom-media",
+        name: "🎬 影音分流",
+        emoji: "🎬",
+        groupType: "select",
+      },
+    ];
+    mocks.buildGeneratedRuleEntries.mockImplementationOnce(
+      (options: { customProxyGroups?: typeof customProxyGroups }) => [
+        {
+          key: "custom-rule-set:media",
+          editable: true,
+          summary: "Elsevier",
+          sourceLabel: "自定义规则集",
+          target: options.customProxyGroups?.[0]?.name ?? "",
+          noResolve: false,
+          text: "RULE-SET,elsevier,🎬 影音分流",
+        },
+      ],
+    );
+
+    const tree = renderSection({ customProxyGroups });
+    const targetBadge = collectElements(
+      tree,
+      (element) =>
+        typeof element.props.className === "string" &&
+        element.props.className.includes("border-indigo-500/30"),
+    )[0];
+
+    expect(mocks.buildGeneratedRuleEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ customProxyGroups }),
+    );
+    expect(collectText(targetBadge)).toBe("🎬 影音分流");
+    expect(targetBadge.props.className).toContain("whitespace-nowrap");
+  });
+
+  it("renders a readable fallback instead of an empty target badge", () => {
+    mocks.entries = [
+      {
+        key: "custom-rule-set:legacy",
+        editable: true,
+        summary: "Legacy",
+        sourceLabel: "自定义规则集",
+        target: "   ",
+        noResolve: false,
+        text: "RULE-SET,legacy,",
+      },
+    ];
+
+    const tree = renderSection();
+    const targetBadges = collectElements(
+      tree,
+      (element) =>
+        typeof element.props.className === "string" &&
+        element.props.className.includes("border-indigo-500/30"),
+    );
+
+    expect(targetBadges).toHaveLength(1);
+    expect(collectText(targetBadges[0])).toBe("目标分流组不可用");
+  });
+
   it("keeps visible rule tags out of details and keeps order controls row-based", () => {
     mocks.entries = [
       {
         key: "custom-rule:ip",
         editable: true,
-        summary: "35.212.230.0/24",
+        summary: "203.0.113.0/24",
         sourceLabel: "自定义规则",
         target: "🚀 节点选择",
         noResolve: false,
-        text: "IP-CIDR,35.212.230.0/24,🚀 节点选择",
+        text: "IP-CIDR,203.0.113.0/24,🚀 节点选择",
       },
       {
         key: "special:match",
@@ -200,7 +263,7 @@ describe("RulesManagementSection", () => {
       defaultTree,
       (element) =>
         typeof element.props.className === "string" &&
-        element.props.className.includes("border-white/10 bg-white/5 px-3 py-1.5"),
+        element.props.className.includes("border-ink/10 bg-ink/5 px-3 py-1.5"),
     )[0];
     const row = collectElements(
       defaultTree,
@@ -224,16 +287,16 @@ describe("RulesManagementSection", () => {
         element.props.className.includes("min-w-[8.75rem]"),
     )[0];
 
-    expect(collectText(titleLine)).toContain("35.212.230.0/24");
+    expect(collectText(titleLine)).toContain("203.0.113.0/24");
     expect(collectText(titleLine)).toContain("自定义规则");
     expect(collectText(titleLine)).toContain("🚀 节点选择");
-    expect(collectText(titleLine)).not.toContain("IP-CIDR 35.212.230.0/24");
-    expect(collectText(detail)).toBe("IP-CIDR,35.212.230.0/24");
+    expect(collectText(titleLine)).not.toContain("IP-CIDR 203.0.113.0/24");
+    expect(collectText(detail)).toBe("IP-CIDR,203.0.113.0/24");
     expect(collectText(detail)).not.toContain("🚀 节点选择");
     expect(collectText(detail)).not.toContain("no-resolve");
-    expect(detail.props.title).toBe("IP-CIDR,35.212.230.0/24,🚀 节点选择");
-    expect(entryRow.props.className).toContain("border-white/10");
-    expect(entryRow.props.className).toContain("bg-white/5");
+    expect(detail.props.title).toBe("IP-CIDR,203.0.113.0/24,🚀 节点选择");
+    expect(entryRow.props.className).toContain("border-ink/10");
+    expect(entryRow.props.className).toContain("bg-ink/5");
     expect(row.props.className).not.toContain("sm:grid");
     expect(orderControls.props.className).toContain("shrink-0");
     expect(modeRows.map((element) => element.props.className)).toEqual([

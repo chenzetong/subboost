@@ -104,6 +104,7 @@ describe("local subscription auto update service", () => {
     });
     mocks.prepareRefreshCacheResult.mockReturnValue({
       ok: true,
+      refreshedConfig: { rules: [], sources: [{ url: "https://airport.example/sub" }] },
       cacheEntry: { nodes: [{ name: "A" }], subscriptionInfo: { upload: 1 } },
       nodeCount: 1,
     });
@@ -215,6 +216,100 @@ describe("local subscription auto update service", () => {
       kind: "failed",
       subscriptionId: "sub-1",
     });
+  });
+
+  it("persists quota failure facts and disables on the third failure without writing cache data", async () => {
+    const quotaState = {
+      externalFailureCount: 2,
+      failureSourceState: "external-state",
+      lastFailedAt: null,
+      lastAttemptedAt: now,
+      nodeQuotaFailureCount: 3,
+      lastNodeQuotaExceededAt: now,
+      lastNodeQuotaActual: 501,
+      lastNodeQuotaLimit: 500,
+      disabledAt: now,
+      disabledReason: "节点数连续超过配额",
+      disabledPreviousInterval: 60,
+    };
+    mocks.prepareRefreshCacheResult.mockReturnValueOnce({
+      ok: false,
+      reason: "node_quota_exceeded",
+      nodeCount: 501,
+      maxNodesPerSubscription: 500,
+    });
+    mocks.resolveAutomaticRefreshCompletionDecision.mockReturnValueOnce({
+      kind: "node_quota_exceeded",
+      nextAutoUpdateState: {
+        state: quotaState,
+        externalFailureCount: 2,
+        shouldDisableAutoUpdate: true,
+      },
+      outcome: { kind: "failed", subscriptionId: "sub-1" },
+    });
+
+    await runLocalSubscriptionAutoUpdateCron(now);
+
+    expect(mocks.prisma.subscription.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ autoUpdateInterval: null }),
+      })
+    );
+    expect(mocks.prisma.subscriptionAutoUpdateState.upsert).toHaveBeenCalledWith({
+      where: { subscriptionId: "sub-1" },
+      create: { subscriptionId: "sub-1", ...quotaState },
+      update: quotaState,
+    });
+    expect(mocks.encryptJson).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(
+      "[local-subscription-cron] node quota exceeded",
+      expect.objectContaining({
+        subscriptionId: "sub-1",
+        actualNodeCount: 501,
+        effectiveNodeLimit: 500,
+        nodeQuotaFailureCount: 3,
+        autoUpdateDisabled: true,
+      })
+    );
+  });
+
+  it("keeps automatic updates enabled before the quota failure threshold", async () => {
+    const quotaState = {
+      externalFailureCount: 2,
+      nodeQuotaFailureCount: 2,
+      lastNodeQuotaActual: 501,
+      lastNodeQuotaLimit: 500,
+    };
+    mocks.prepareRefreshCacheResult.mockReturnValueOnce({
+      ok: false,
+      reason: "node_quota_exceeded",
+      nodeCount: 501,
+      maxNodesPerSubscription: 500,
+    });
+    mocks.resolveAutomaticRefreshCompletionDecision.mockReturnValueOnce({
+      kind: "node_quota_exceeded",
+      nextAutoUpdateState: {
+        state: quotaState,
+        externalFailureCount: 2,
+        shouldDisableAutoUpdate: false,
+      },
+      outcome: { kind: "failed", subscriptionId: "sub-1" },
+    });
+
+    await runLocalSubscriptionAutoUpdateCron(now);
+
+    expect(mocks.prisma.subscription.updateMany.mock.calls[0]?.[0]?.data).not.toHaveProperty(
+      "autoUpdateInterval"
+    );
+    expect(mocks.prisma.subscriptionAutoUpdateState.upsert).toHaveBeenCalledWith({
+      where: { subscriptionId: "sub-1" },
+      create: { subscriptionId: "sub-1", ...quotaState },
+      update: quotaState,
+    });
+    expect(console.warn).toHaveBeenCalledWith(
+      "[local-subscription-cron] node quota exceeded",
+      expect.objectContaining({ nodeQuotaFailureCount: 2, autoUpdateDisabled: false })
+    );
   });
 
   it("captures unexpected failures and keeps the cron summary going", async () => {

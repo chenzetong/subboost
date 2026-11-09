@@ -20,6 +20,10 @@ function state(patch: Partial<GroupListenerConflictState> = {}): GroupListenerCo
 }
 
 describe("resolveEffectiveMixedPort", () => {
+  it("resolves a port supplied through a YAML merge key", () => {
+    expect(resolveEffectiveMixedPort("<<: &defaults {mixed-port: 9999}\n", 7890)).toBe(9999);
+  });
+
   it("prefers the base YAML override over the settings value", () => {
     expect(resolveEffectiveMixedPort("mixed-port: 9999\n", 7890)).toBe(9999);
   });

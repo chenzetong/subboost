@@ -20,10 +20,12 @@ export type KnownNodeType =
   | "https"
   | "ssh"
   | "direct"
+  | "reject"
   | "dns"
   | "mieru"
   | "masque"
   | "sudoku"
+  | "trusttunnel"
   | "relay";
 
 // 支持上游 Clash/Mihomo 新增的代理类型：例如 wireguard / snell / mieru ...
@@ -105,6 +107,15 @@ export interface VMessNode extends BaseNode {
 }
 
 export interface XHttpDownloadSettings {
+  server?: string;
+  port?: number;
+  tls?: boolean;
+  servername?: string;
+  "client-fingerprint"?: string;
+  "skip-cert-verify"?: boolean;
+  alpn?: string[];
+  "reality-opts"?: VLESSNode["reality-opts"];
+  "reuse-settings"?: XHttpReuseSettings;
   path?: string;
   host?: string;
   headers?: Record<string, string>;
@@ -117,6 +128,7 @@ export interface XHttpReuseSettings {
   "c-max-reuse-times"?: string;
   "h-max-request-times"?: string;
   "h-max-reusable-secs"?: string;
+  "h-keep-alive-period"?: number;
   [key: string]: unknown;
 }
 
@@ -127,7 +139,23 @@ export interface XHttpOpts {
   headers?: Record<string, string>;
   "no-grpc-header"?: boolean;
   "x-padding-bytes"?: string;
-  "sc-max-each-post-bytes"?: number;
+  "sc-max-each-post-bytes"?: number | string;
+  "sc-min-posts-interval-ms"?: string;
+  "x-padding-obfs-mode"?: boolean;
+  "x-padding-key"?: string;
+  "x-padding-header"?: string;
+  "x-padding-placement"?: string;
+  "x-padding-method"?: string;
+  "uplink-http-method"?: string;
+  "session-placement"?: string;
+  "session-key"?: string;
+  "session-table"?: string;
+  "session-length"?: string;
+  "seq-placement"?: string;
+  "seq-key"?: string;
+  "uplink-data-placement"?: string;
+  "uplink-data-key"?: string;
+  "uplink-chunk-size"?: string;
   "reuse-settings"?: XHttpReuseSettings;
   "download-settings"?: XHttpDownloadSettings;
   [key: string]: unknown;
@@ -167,6 +195,7 @@ export interface VLESSNode extends BaseNode {
   "reality-opts"?: {
     "public-key"?: string;
     "short-id"?: string;
+    "support-x25519mlkem768"?: boolean;
     [key: string]: unknown;
   };
 }
@@ -214,6 +243,7 @@ export interface HysteriaNode extends BaseNode {
   ports?: string;
   obfs?: string;
   _obfs?: string;
+  "fast-open"?: boolean;
   tfo?: boolean;
 }
 
@@ -226,6 +256,9 @@ export interface Hysteria2Node extends BaseNode {
   fingerprint?: string;
   obfs?: string;
   "obfs-password"?: string;
+  "obfs-min-packet-size"?: number;
+  "obfs-max-packet-size"?: number;
+  "ech-opts"?: { enable: boolean; config?: string; "query-server-name"?: string };
   up?: string;
   down?: string;
   ports?: string;
@@ -245,6 +278,7 @@ export interface TuicNode extends BaseNode {
   "heartbeat-interval"?: number;
   "max-open-streams"?: number;
   "max-idle-time"?: number;
+  "fast-open"?: boolean;
   tfo?: boolean;
   "reduce-rtt"?: boolean;
   "skip-cert-verify"?: boolean;
@@ -280,7 +314,7 @@ export interface SshNode extends BaseNode {
   "host-key"?: string[];
 }
 
-export interface WireGuardNode extends BaseNode {
+export interface WireGuardNode extends EndpointOptionalNode {
   type: "wireguard";
   "private-key": string;
   "public-key"?: string;
@@ -289,6 +323,7 @@ export interface WireGuardNode extends BaseNode {
   ipv6?: string;
   mtu?: number;
   keepalive?: number;
+  "persistent-keepalive"?: number;
   reserved?: number[] | string;
   dns?: string[];
   peers?: Array<Record<string, unknown>>;
@@ -301,7 +336,7 @@ export interface SnellNode extends BaseNode {
   psk: string;
   version?: number;
   "obfs-opts"?: {
-    mode?: "http" | "tls";
+    mode?: "http" | "tls" | "shadow-tls";
     host?: string;
     path?: string;
     [key: string]: unknown;
@@ -324,12 +359,29 @@ export interface DnsNode extends EndpointOptionalNode {
   udp?: boolean;
 }
 
-export interface MieruNode extends BaseNode {
+export interface RejectNode extends EndpointOptionalNode {
+  type: "reject";
+}
+
+export interface MieruNode extends EndpointOptionalNode {
   type: "mieru";
+  server: string;
   username?: string;
   password?: string;
   transport?: string;
   "port-range"?: string;
+}
+
+export interface TrustTunnelNode extends BaseNode {
+  type: "trusttunnel";
+  username?: string;
+  password?: string;
+  sni?: string;
+  alpn?: string[];
+  "client-fingerprint"?: string;
+  "skip-cert-verify"?: boolean;
+  "health-check"?: boolean;
+  quic?: boolean;
 }
 
 export interface MasqueNode extends BaseNode {
@@ -365,9 +417,11 @@ export type ParsedNode =
   | SnellNode
   | DirectNode
   | DnsNode
+  | RejectNode
   | MieruNode
   | MasqueNode
   | SudokuNode
+  | TrustTunnelNode
   | SocksNode
   | HttpNode
   | SshNode

@@ -187,6 +187,7 @@ export interface UserConfig {
   autoSelectStrategy: "url-test" | "fallback" | "load-balance";
   testUrl: string;
   testInterval: number;
+  sharedHealthChecks?: boolean;
   
   // 规则设置
   ruleProviderBaseUrl: string;
@@ -211,13 +212,14 @@ export interface UserConfig {
 
 export interface CustomRule {
   id: string;
-  type: "DOMAIN" | "DOMAIN-SUFFIX" | "DOMAIN-KEYWORD" | "IP-CIDR" | "IP-CIDR6" | "GEOIP" | "GEOSITE" | "PROCESS-NAME" | "DST-PORT" | "SRC-PORT";
+  type: import("../rules/custom-rule-types").CustomRuleType;
   value: string;
   target: ProxyGroupRuleTarget;
   noResolve?: boolean;
 }
 
-export type RuleSetBehavior = "domain" | "ipcidr";
+export type RuleSetBehavior = "domain" | "ipcidr" | "classical";
+export type RuleSetFormat = "mrs" | "yaml" | "text";
 
 export type NodeRegion =
   | "us"
@@ -262,6 +264,7 @@ export function isProxyGroupGroupType(value: unknown): value is ProxyGroupGroupT
 }
 
 export interface ProxyGroupAdvancedConfig {
+  testUrl?: string;
   sourceIds?: string[];
   regions?: NodeRegion[];
   includeRegex?: string;
@@ -273,10 +276,13 @@ export interface ProxyGroupAdvancedConfig {
   memberOrder?: ProxyGroupMemberRef[];
 }
 
+export type RuleSetMetadata = Pick<CustomRuleSet, "name" | "path" | "behavior" | "format">;
+
 export interface CustomRuleSet {
   id: string;
   name: string;
   behavior: RuleSetBehavior;
+  format?: RuleSetFormat;
   path: string;
   target: ProxyGroupRuleTarget;
   noResolve?: boolean;
